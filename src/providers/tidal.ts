@@ -9,7 +9,7 @@ interface TokenState {
   expiresAt: number;
 }
 
-export function createTidalProvider(config: Config): Provider {
+export function createTidalProvider(config: Config, request: typeof httpJson = httpJson): Provider {
   let token: TokenState | null = null;
 
   async function bearer(): Promise<string | null> {
@@ -18,7 +18,7 @@ export function createTidalProvider(config: Config): Provider {
     const basic = Buffer.from(`${config.tidalClientId}:${config.tidalClientSecret}`).toString(
       "base64",
     );
-    const res = await httpJson<{ access_token?: string; expires_in?: number }>(
+    const res = await request<{ access_token?: string; expires_in?: number }>(
       "https://auth.tidal.com/v1/oauth2/token",
       {
         method: "POST",
@@ -41,7 +41,7 @@ export function createTidalProvider(config: Config): Provider {
   async function tidalGet<T>(path: string): Promise<T | null> {
     const access = await bearer();
     if (!access) return null;
-    const res = await httpJson<T>(`https://openapi.tidal.com/v2${path}`, {
+    const res = await request<T>(`https://openapi.tidal.com/v2${path}`, {
       headers: {
         Authorization: `Bearer ${access}`,
         Accept: "application/vnd.api+json",
@@ -69,24 +69,35 @@ export function createTidalProvider(config: Config): Provider {
     },
     async search(query: SearchQuery) {
       const q = `${query.artists[0] ?? ""} ${query.title}`.trim();
+      const params = new URLSearchParams({
+        "filter[query]": q,
+        countryCode: config.tidalCountry,
+        include: "tracks,tracks.artists",
+      });
       const json = await tidalGet<TidalDoc>(
-        `/searchResults/${encodeURIComponent(q)}?countryCode=${config.tidalCountry}&include=tracks,tracks.artists`,
+        `/searchResults?${params}`,
       );
       if (!json) return [];
-      const trackIds = asArray(
-        asRecord(asRecord(json.data)?.relationships)?.tracks
-          ? asRecord(asRecord(asRecord(json.data)?.relationships)?.tracks)?.data
-          : null,
-      ) as Array<{ id?: string; type?: string }>;
+      const results = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+      const relationships = results.map((result) =>
+        asRecord(asRecord(asRecord(result)?.relationships)?.tracks),
+      );
+      const trackIds = relationships.flatMap((relationship) => asArray(relationship?.data));
       const includedTracks = asArray(json.included).filter(
         (item) => asRecord(item)?.type === "tracks",
       );
+      // Relationship order is search rank; included resources need not be
+      // ordered and can contain unrelated tracks. Only fall back when linkage
+      // is absent, not when the API explicitly returns an empty track list.
+      const candidates = relationships.some((relationship) => Array.isArray(relationship?.data))
+        ? trackIds
+        : results.length ? includedTracks : [];
       const hits: TrackHit[] = [];
       const seen = new Set<string>();
-      for (const item of [...trackIds, ...includedTracks]) {
+      for (const item of candidates) {
         const rec = asRecord(item);
         const id = asString(rec?.id);
-        if (!id || seen.has(id)) continue;
+        if (rec?.type !== "tracks" || !id || seen.has(id)) continue;
         seen.add(id);
         const hit = fromDoc(json, id) ?? fromResource(rec, json.included);
         if (hit) hits.push(hit);

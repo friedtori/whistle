@@ -10,6 +10,78 @@ import {
 } from "./helpers.ts";
 
 describe("resolution pipeline", () => {
+  it("rejects wrong-artist destinations in every fuzzy stage, including MusicBrainz and Spotify", async () => {
+    const db = memoryStore();
+    const wrong = { artists: ["Tribute Band"], isrc: "USWRG0000001" };
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer", { isrc: null }) },
+      }),
+      apple: stubProvider("apple", { searchHits: [hit("apple", wrong)] }),
+      tidal: stubProvider("tidal", { searchHits: [hit("tidal", wrong)] }),
+      ytm: stubProvider("ytm", { searchHits: [hit("ytm", wrong)] }),
+      spotify: stubProvider("spotify", { searchHits: [hit("spotify", wrong)] }),
+      musicbrainz: stubMb({ searchHits: [hit("musicbrainz", wrong)] }),
+    });
+    try {
+      const result = await resolveTrack(
+        { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
+      );
+      expect(result.links.filter((link) => !link.unmatched).map((link) => link.platform)).toEqual(["deezer"]);
+      expect(result.identifiers.some((id) => id.kind === "isrc")).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("retries search when the strict results contain only a wrong performer", async () => {
+    const db = memoryStore();
+    const { searchWithPlainFallback } = await import("../src/providers/search.ts");
+    const calls: string[] = [];
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer", { isrc: null }) },
+      }),
+      apple: {
+        ...stubProvider("apple"),
+        async search(query) {
+          return searchWithPlainFallback(query, "strict", async (q) => {
+            calls.push(q);
+            return [q === "strict" ? hit("apple", { artists: ["Tribute Band"] }) : hit("apple")];
+          });
+        },
+      },
+    });
+    try {
+      const result = await resolveTrack(
+        { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
+      );
+      expect(calls).toEqual(["strict", "The Weeknd Blinding Lights"]);
+      expect(result.links.find((link) => link.platform === "apple")).toMatchObject({ unmatched: false, method: "fuzzy" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("bootstraps non-Latin metadata and rejects unrelated equal-duration titles", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", { searchHits: [
+        hit("deezer", { title: "別の曲", artists: ["宇多田ヒカル"], isrc: null }),
+        hit("deezer", { id: "123", title: "光", artists: ["宇多田ヒカル"], isrc: null }),
+      ] }),
+    });
+    try {
+      const result = await resolveTrack(
+        { artist: "宇多田ヒカル", title: "光", duration_ms: BLINDING_LIGHTS.duration_ms }, { db, providers },
+      );
+      expect(result.recording.title).toBe("光");
+      expect(result.identifiers).toContainEqual({ kind: "deezer", value: "123" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("resolves by ISRC and returns confidence + method for each v1 platform", async () => {
     const db = memoryStore();
     const providers = mockProviders({

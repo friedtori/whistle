@@ -1,6 +1,8 @@
 import type { TrackHit } from "./types.ts";
 
 const DURATION_GATE_MS = 2000;
+const TITLE_MATCH_THRESHOLD = 0.8;
+const ARTIST_MATCH_THRESHOLD = 0.8;
 
 const VERSION_FAMILIES: Array<{ family: string; pattern: RegExp }> = [
   { family: "live", pattern: /\blive\b/i },
@@ -11,6 +13,8 @@ const VERSION_FAMILIES: Array<{ family: string; pattern: RegExp }> = [
   { family: "instrumental", pattern: /\binstrumental\b/i },
   { family: "karaoke", pattern: /\bkaraoke\b/i },
   { family: "cover", pattern: /\bcover\b/i },
+  { family: "demo", pattern: /\bdemo\b/i },
+  { family: "session", pattern: /\bsession\b/i },
 ];
 
 const ARTIST_STOP_WORDS = new Set(["the", "a", "an", "and", "of", "feat", "ft", "featuring"]);
@@ -30,7 +34,19 @@ export function versionKeywordsConflict(sourceTitle: string, candidateTitle: str
   for (const family of a) {
     if (!b.has(family)) return true;
   }
+  // Family equality is insufficient: two named remixes or live venues may
+  // represent different recordings. Ignore punctuation and spelling aliases,
+  // but retain every word of the version-bearing title.
+  if (a.size > 0 && versionTitle(sourceTitle) !== versionTitle(candidateTitle)) return true;
   return false;
+}
+
+function versionTitle(title: string): string {
+  let normalized = title;
+  for (const { family, pattern } of VERSION_FAMILIES) {
+    normalized = normalized.replace(new RegExp(pattern.source, "gi"), family);
+  }
+  return normalizeTitle(normalized);
 }
 
 export function durationWithinGate(
@@ -38,26 +54,36 @@ export function durationWithinGate(
   candidateMs: number | null | undefined,
   gateMs = DURATION_GATE_MS,
 ): boolean {
-  if (sourceMs == null || candidateMs == null) return false;
+  if (
+    sourceMs == null || candidateMs == null ||
+    !Number.isFinite(sourceMs) || !Number.isFinite(candidateMs) ||
+    sourceMs <= 0 || candidateMs <= 0
+  ) return false;
   return Math.abs(sourceMs - candidateMs) <= gateMs;
 }
 
 export function normalizeTitle(title: string): string {
-  return title
+  // Strip only explicit featured-artist credits; parentheses can contain
+  // meaningful subtitles, mix names, or the entire title.
+  return normalizeText(title
+    .replace(/[([]\s*(?:feat\.?|ft\.?|featuring)\s+[^)\]]*[)\]]/gi, " ")
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.*$/i, " "));
+}
+
+function normalizeText(value: string): string {
+  return value
+    .normalize("NFKC")
     .toLowerCase()
-    .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
-    .replace(/\b(feat\.?|ft\.?|featuring)\b.*$/i, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 export function titleSimilarity(a: string, b: string): number {
-  const na = normalizeTitle(a);
-  const nb = normalizeTitle(b);
+  const na = versionTitle(a);
+  const nb = versionTitle(b);
   if (!na || !nb) return 0;
   if (na === nb) return 1;
-  if (na.includes(nb) || nb.includes(na)) return 0.85;
   const ta = new Set(na.split(" "));
   const tb = new Set(nb.split(" "));
   let inter = 0;
@@ -67,13 +93,9 @@ export function titleSimilarity(a: string, b: string): number {
 }
 
 export function artistTokens(raw: string): Set<string> {
-  return new Set(
-    raw
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((token) => token && !ARTIST_STOP_WORDS.has(token)),
-  );
+  const tokens = normalizeText(raw).split(/\s+/).filter(Boolean);
+  const meaningful = tokens.filter((token) => !ARTIST_STOP_WORDS.has(token));
+  return new Set(meaningful.length ? meaningful : tokens);
 }
 
 export function artistSimilarity(queryArtist: string, candidateArtists: string[] | string): number {
@@ -116,9 +138,11 @@ export interface FuzzyDecision {
   reason?: string;
 }
 
+type FuzzyTrack = Pick<TrackHit, "title" | "artists" | "duration_ms">;
+
 export function evaluateFuzzy(
-  source: { title: string; duration_ms: number | null },
-  candidate: Pick<TrackHit, "title" | "duration_ms">,
+  source: FuzzyTrack,
+  candidate: FuzzyTrack,
 ): FuzzyDecision {
   if (!durationWithinGate(source.duration_ms, candidate.duration_ms)) {
     return { accepted: false, confidence: 0, reason: "duration" };
@@ -128,12 +152,20 @@ export function evaluateFuzzy(
   }
   const durDiff = Math.abs((source.duration_ms ?? 0) - (candidate.duration_ms ?? 0));
   const sim = titleSimilarity(source.title, candidate.title);
+  if (sim < TITLE_MATCH_THRESHOLD) {
+    return { accepted: false, confidence: 0, reason: "title" };
+  }
+  // Compare primary credits independently so a shared guest or one common
+  // token cannot rescue a different performer. Missing credits fail closed.
+  if (artistSimilarity(source.artists[0] ?? "", candidate.artists[0] ?? "") < ARTIST_MATCH_THRESHOLD) {
+    return { accepted: false, confidence: 0, reason: "artist" };
+  }
   const confidence = Math.min(0.8, 0.5 + 0.2 * (1 - durDiff / DURATION_GATE_MS) + 0.15 * sim);
   return { accepted: true, confidence };
 }
 
 export function pickFuzzyMatch(
-  source: { title: string; duration_ms: number | null; album?: string | null },
+  source: FuzzyTrack & { album?: string | null },
   candidates: TrackHit[],
 ): { hit: TrackHit; confidence: number } | null {
   const queryAlbum = source.album?.trim() ?? "";

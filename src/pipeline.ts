@@ -1,5 +1,5 @@
 import type { Store } from "./db.ts";
-import { artistOverlaps, pickFuzzyMatch } from "./fuzzy.ts";
+import { pickFuzzyMatch } from "./fuzzy.ts";
 import { HttpError, canonicalUrl, parseInput } from "./ids.ts";
 import type {
   IdentifierKind,
@@ -200,7 +200,7 @@ async function bootstrapFromSearch(
   const duration_ms = parsed.duration_ms ?? null;
   if (!artist || !title || duration_ms == null) return null;
 
-  const probe = { title, duration_ms, album };
+  const probe = { title, artists: [artist], duration_ms, album };
   for (const platform of SEARCH_BOOTSTRAP) {
     const provider = providers[platform];
     if (!provider.enabled) continue;
@@ -210,13 +210,9 @@ async function bootstrapFromSearch(
         artists: [artist],
         duration_ms,
         acceptHits: (candidates) =>
-          pickFuzzyMatch(
-            probe,
-            candidates.filter((candidate) => artistOverlaps(artist, candidate.artists)),
-          ) !== null,
+          pickFuzzyMatch(probe, candidates) !== null,
       });
-      const withArtist = hits.filter((hit) => artistOverlaps(artist, hit.artists));
-      const picked = pickFuzzyMatch(probe, withArtist);
+      const picked = pickFuzzyMatch(probe, hits);
       if (picked) return picked.hit;
     } catch (err) {
       warn(platform, "search", err);
@@ -340,6 +336,7 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
   const recording = deps.db.findRecordingById(recordingId)!;
   const probe = {
     title: recording.title || source.title,
+    artists: recording.artists.length ? recording.artists : source.artists,
     duration_ms: recording.duration_ms ?? source.duration_ms,
     album: source.album,
   };
@@ -390,6 +387,7 @@ async function runSpotifyLast(
   try {
     const probe = {
       title: recording.title || source.title,
+      artists: recording.artists.length ? recording.artists : source.artists,
       duration_ms: recording.duration_ms ?? source.duration_ms,
       album: source.album,
     };
@@ -399,14 +397,7 @@ async function runSpotifyLast(
       duration_ms: probe.duration_ms,
       acceptHits: (candidates) => pickFuzzyMatch(probe, candidates) !== null,
     });
-    const picked = pickFuzzyMatch(
-      {
-        title: recording.title || source.title,
-        duration_ms: recording.duration_ms ?? source.duration_ms,
-        album: source.album,
-      },
-      hits,
-    );
+    const picked = pickFuzzyMatch(probe, hits);
     if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
   } catch (err) {
     warn("spotify", "search", err);
