@@ -56,6 +56,7 @@ describe("HTTP API", () => {
       expect(link).toHaveProperty("method");
     }
     expect(res.body.cached).toBe(false);
+    expect(res.body.recording_confidence).toBe(0.98);
 
     const again = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
     expect(again.status).toBe(200);
@@ -110,6 +111,7 @@ describe("HTTP API", () => {
     expect(res.status).toBe(200);
     expect(res.body.recording.title).toBe("Blinding Lights");
     expect(res.body.cached).toBe(false);
+    expect(typeof res.body.recording_confidence).toBe("number");
     const deezer = res.body.links.find((link: { platform: string }) => link.platform === "deezer");
     expect(deezer).toMatchObject({ unmatched: false, method: "fuzzy" });
     expect(res.body.links.find((link: { platform: string }) => link.platform === "apple")).toMatchObject({
@@ -198,6 +200,7 @@ describe("HTTP API", () => {
     expect(res.status).toBe(200);
     expect(res.body.recording.id).toBe(resolved.body.recording.id);
     expect(res.body.cached).toBe(true);
+    expect(res.body.recording_confidence).toBe(resolved.body.recording_confidence);
     expect(await request(app).get("/v1/recordings/does-not-exist")).toMatchObject({ status: 404 });
   });
 
