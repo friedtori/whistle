@@ -57,11 +57,18 @@ describe("HTTP API", () => {
     }
     expect(res.body.cached).toBe(false);
     expect(res.body.recording_confidence).toBe(0.98);
+    expect(res.body.evidence.matching_rule_version).toBeTruthy();
+    expect(typeof res.body.evidence.credentials_skipped).toBe("number");
+    expect(res.body.evidence.recording_reused).toBe(false);
+    expect(res.body.evidence.query_match).toMatchObject({ method: "isrc" });
+    expect(Array.isArray(res.body.evidence.destinations)).toBe(true);
 
     const again = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
     expect(again.status).toBe(200);
     expect(again.body.cached).toBe(true);
     expect(again.body.recording.id).toBe(res.body.recording.id);
+    expect(again.body.evidence.recording_reused).toBe(true);
+    expect(again.body.evidence.reuse_via).toBe("input_cache");
   });
 
   it("resolves Spotify / Apple / Deezer / Tidal ids or URLs to one recording", async () => {

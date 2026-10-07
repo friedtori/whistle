@@ -134,10 +134,58 @@ export type ProviderMap = {
   ytm: Provider;
 };
 
+export const MATCHING_RULE_VERSION = "2026-10-07.identity-destination.2";
+
+export type ReuseVia = "input_cache" | "isrc" | "mbid" | "platform_id" | null;
+
+export interface QueryMatchEvidence {
+  method: MatchMethod | null;
+  confidence: number | null;
+  reason?: string;
+}
+
+export interface SourceEvidence {
+  platform: Platform;
+  id: string;
+  title: string;
+  artists: string[];
+  album: string | null;
+  duration_ms: number | null;
+  isrc: string | null;
+}
+
+export interface DestinationEvidence {
+  platform: Platform;
+  accepted: boolean;
+  reason?: string | null;
+  method: MatchMethod | null;
+  confidence: number;
+  title?: string;
+  artists?: string[];
+  album?: string | null;
+  duration_ms?: number | null;
+  isrc?: string | null;
+  url?: string | null;
+}
+
+export interface ResolveEvidence {
+  matching_rule_version: string;
+  commit?: string;
+  cached: boolean;
+  recording_reused: boolean;
+  reuse_via: ReuseVia;
+  query_match: QueryMatchEvidence | null;
+  source: SourceEvidence | null;
+  destinations: DestinationEvidence[];
+  providers_enabled: Platform[];
+  credentials_skipped: number;
+}
+
 export interface ResolveResponse {
   recording: Recording;
   recording_confidence: number;
   identifiers: Array<{ kind: IdentifierKind; value: string }>;
   links: PlatformLink[];
   cached: boolean;
+  evidence: ResolveEvidence;
 }
