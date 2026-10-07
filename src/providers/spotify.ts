@@ -2,7 +2,7 @@ import type { Config } from "../config.ts";
 import { hasSpotifyAuth } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
 import { asArray, asNumber, asString, httpJson } from "../http.ts";
-import { searchWithPlainFallback } from "./search.ts";
+import { quoteSearchValue, searchWithPlainFallback } from "./search.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
 interface TokenState {
@@ -65,7 +65,7 @@ export function createSpotifyProvider(config: Config): Provider {
     async search(query: SearchQuery) {
       return searchWithPlainFallback(
         query,
-        `track:${query.title} artist:${query.artists[0] ?? ""}`,
+        `track:${quoteSearchValue(query.title)} artist:${quoteSearchValue(query.artists[0] ?? "")}`,
         async (q) => {
           const json = await spotifyGet<{ tracks?: { items?: SpotifyTrack[] } }>(
             `/search?q=${encodeURIComponent(q)}&type=track&limit=8`,

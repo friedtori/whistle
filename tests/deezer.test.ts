@@ -37,12 +37,36 @@ describe("Deezer search fallback", () => {
 
     expect(calls).toHaveLength(2);
     expect(decodeURIComponent(calls[0])).toContain('artist:"Alanis Morissette" track:"Narcissus"');
-    expect(decodeURIComponent(calls[1])).toContain("q=Alanis Morissette Narcissus");
+    expect(decodeURIComponent(calls[1])).toContain('q="Alanis Morissette Narcissus"');
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
       title: "Narcissus",
       duration_ms: 218_000,
       album: "Under Rug Swept",
     });
+  });
+
+  it("retries plain search when strict hits fail the acceptance gate", async () => {
+    const calls: string[] = [];
+    const provider = createDeezerProvider(async <T>(url: string) => {
+      calls.push(decodeURIComponent(url));
+      if (url.includes("artist:")) {
+        return ok({
+          data: [{ id: 1, title: "Narcissus (Live)", duration: 240, artist: { name: "Alanis Morissette" } }],
+        }) as JsonResponse<T>;
+      }
+      return ok({
+        data: [{ id: 2, title: "Narcissus", duration: 218, artist: { name: "Alanis Morissette" } }],
+      }) as JsonResponse<T>;
+    });
+
+    const hits = await provider.search({
+      title: "Narcissus",
+      artists: ["Alanis Morissette"],
+      acceptHits: (candidates) => candidates.some((item) => item.title === "Narcissus"),
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(hits[0]?.id).toBe("2");
   });
 });

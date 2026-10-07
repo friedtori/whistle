@@ -22,7 +22,7 @@ export const IDENTIFIER_KINDS = [
 
 export type IdentifierKind = (typeof IDENTIFIER_KINDS)[number];
 
-export const MATCH_METHODS = ["isrc", "mb_relation", "fuzzy", "user"] as const;
+export const MATCH_METHODS = ["isrc", "isrc_from_fuzzy", "mb_relation", "fuzzy", "user"] as const;
 export type MatchMethod = (typeof MATCH_METHODS)[number];
 
 export interface Recording {
@@ -107,12 +107,14 @@ export interface SearchQuery {
   title: string;
   artists: string[];
   duration_ms?: number | null;
+  acceptHits?: (hits: TrackHit[]) => boolean;
 }
 
 export interface Provider {
   platform: Platform;
   enabled: boolean;
   supportsIsrcLookup: boolean;
+  skipReason?: () => string | null;
   getById(id: string): Promise<TrackHit | null>;
   getByIsrc(isrc: string): Promise<TrackHit | null>;
   search(query: SearchQuery): Promise<TrackHit[]>;

@@ -21,9 +21,12 @@ const SEARCH_BOOTSTRAP: Platform[] = ["deezer", "apple", "tidal"];
 
 const CONFIDENCE = {
   isrc: 0.98,
+  isrc_from_fuzzy: 0.8 * 0.98,
   mb_relation: 0.9,
   user: 1,
 } as const;
+
+type IsrcOrigin = "trusted" | "fuzzy";
 
 export interface ResolveDeps {
   db: Store;
@@ -64,16 +67,21 @@ export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Prom
     parsed.kind === source.platform ? 1 : undefined,
   );
 
-  const isrcs = new Set<string>();
-  if (parsed.kind === "isrc") isrcs.add(parsed.value);
-  addIsrcsFromHit(isrcs, source);
-  for (const isrc of isrcs) deps.db.addIdentifier(recording.id, "isrc", isrc);
+  const sourceMethod = methodForSource(parsed.kind, source);
+  const isrcs = new IsrcBag();
+  if (parsed.kind === "isrc") isrcs.add([parsed.value], "trusted");
+  isrcs.add(
+    collectIsrcs(source),
+    sourceMethod === "fuzzy" || parsed.kind === "query" ? "fuzzy" : "trusted",
+  );
+  for (const isrc of isrcs.trusted()) deps.db.addIdentifier(recording.id, "isrc", isrc);
 
-  await runIsrcStage(deps, recording.id, isrcs);
+  const triedIsrcs = new Set<string>();
+  await runIsrcStage(deps, recording.id, isrcs, triedIsrcs);
   await runMbStage(deps, recording.id, isrcs, source);
-  await runIsrcStage(deps, recording.id, isrcs);
+  await runIsrcStage(deps, recording.id, isrcs, triedIsrcs);
   await runFuzzyStage(deps, recording.id, source);
-  await runSpotifyLast(deps, recording.id, isrcs, source);
+  await runSpotifyLast(deps, recording.id, isrcs, source, triedIsrcs);
   fillUnmatched(deps, recording.id);
 
   const latest = deps.db.findRecordingById(recording.id)!;
@@ -155,8 +163,10 @@ function rememberHit(
     db.addIdentifier(recordingId, "musicbrainz", hit.id);
     db.updateRecording(recordingId, { mbid: hit.id });
   }
-  for (const isrc of collectIsrcs(hit)) {
-    db.addIdentifier(recordingId, "isrc", isrc);
+  if (method !== "fuzzy" && method !== "isrc_from_fuzzy") {
+    for (const isrc of collectIsrcs(hit)) {
+      db.addIdentifier(recordingId, "isrc", isrc);
+    }
   }
   if (hit.mbid) db.updateRecording(recordingId, { mbid: hit.mbid });
   const resolvedConfidence =
@@ -199,6 +209,11 @@ async function bootstrapFromSearch(
         title,
         artists: [artist],
         duration_ms,
+        acceptHits: (candidates) =>
+          pickFuzzyMatch(
+            probe,
+            candidates.filter((candidate) => artistOverlaps(artist, candidate.artists)),
+          ) !== null,
       });
       const withArtist = hits.filter((hit) => artistOverlaps(artist, hit.artists));
       const picked = pickFuzzyMatch(probe, withArtist);
@@ -210,16 +225,27 @@ async function bootstrapFromSearch(
   return null;
 }
 
-async function runIsrcStage(deps: ResolveDeps, recordingId: string, isrcs: Set<string>): Promise<void> {
+async function runIsrcStage(
+  deps: ResolveDeps,
+  recordingId: string,
+  isrcs: IsrcBag,
+  tried: Set<string>,
+): Promise<void> {
   if (isrcs.size === 0) return;
   for (const platform of ISRC_STAGE) {
     if (hasMatch(deps.db, recordingId, platform)) continue;
     const provider = deps.providers[platform];
     if (!provider.enabled || !provider.supportsIsrcLookup) continue;
-    const hit = await firstIsrcHit(provider, isrcs, platform);
-    if (hit) {
-      rememberHit(deps.db, recordingId, hit, "isrc");
-      addIsrcsFromHit(isrcs, hit);
+    const trusted = await firstIsrcHit(provider, isrcs.trusted(), platform, tried);
+    if (trusted) {
+      rememberHit(deps.db, recordingId, trusted, "isrc");
+      isrcs.add(collectIsrcs(trusted), "trusted");
+      continue;
+    }
+    const derived = await firstIsrcHit(provider, isrcs.fuzzy(), platform, tried);
+    if (derived) {
+      rememberHit(deps.db, recordingId, derived, "isrc_from_fuzzy");
+      isrcs.add(collectIsrcs(derived), "fuzzy");
     }
   }
 }
@@ -227,7 +253,7 @@ async function runIsrcStage(deps: ResolveDeps, recordingId: string, isrcs: Set<s
 async function runMbStage(
   deps: ResolveDeps,
   recordingId: string,
-  isrcs: Set<string>,
+  isrcs: IsrcBag,
   source: TrackHit,
 ): Promise<void> {
   const mb = deps.providers.musicbrainz;
@@ -235,15 +261,17 @@ async function runMbStage(
 
   let recording = deps.db.findRecordingById(recordingId)!;
   let mbid = recording.mbid;
+  let mbOrigin: IsrcOrigin | null = mbid ? "trusted" : null;
 
   if (!mbid) {
-    for (const isrc of isrcs) {
+    for (const isrc of isrcs.trusted()) {
       try {
         const hit = await mb.getByIsrc(isrc);
         if (hit?.mbid) {
           rememberHit(deps.db, recordingId, hit, "isrc");
-          addIsrcsFromHit(isrcs, hit);
+          isrcs.add(collectIsrcs(hit), "trusted");
           mbid = hit.mbid;
+          mbOrigin = "trusted";
           break;
         }
       } catch (err) {
@@ -258,12 +286,14 @@ async function runMbStage(
         title: source.title,
         artists: source.artists,
         duration_ms: source.duration_ms,
+        acceptHits: (candidates) => pickFuzzyMatch(source, candidates) !== null,
       });
       const picked = pickFuzzyMatch(source, hits);
       if (picked) {
         rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
-        addIsrcsFromHit(isrcs, picked.hit);
+        isrcs.add(collectIsrcs(picked.hit), "fuzzy");
         mbid = picked.hit.mbid ?? picked.hit.id;
+        mbOrigin = "fuzzy";
       }
     } catch (err) {
       warn("musicbrainz", "search", err);
@@ -274,7 +304,7 @@ async function runMbStage(
 
   try {
     const { relations, isrcs: siblingIsrcs } = await mb.getUrlRelations(mbid);
-    addIsrcs(isrcs, siblingIsrcs);
+    isrcs.add(siblingIsrcs, mbOrigin ?? "fuzzy");
     for (const rel of relations) {
       if (hasMatch(deps.db, recordingId, rel.platform)) continue;
       deps.db.addIdentifier(recordingId, rel.platform, rel.id);
@@ -322,6 +352,7 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
         title: probe.title,
         artists: recording.artists.length ? recording.artists : source.artists,
         duration_ms: probe.duration_ms,
+        acceptHits: (candidates) => pickFuzzyMatch(probe, candidates) !== null,
       });
       const picked = pickFuzzyMatch(probe, hits);
       if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
@@ -334,27 +365,39 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
 async function runSpotifyLast(
   deps: ResolveDeps,
   recordingId: string,
-  isrcs: Set<string>,
+  isrcs: IsrcBag,
   source: TrackHit,
+  tried: Set<string>,
 ): Promise<void> {
   if (hasMatch(deps.db, recordingId, "spotify")) return;
   const provider = deps.providers.spotify;
   if (!provider.enabled) return;
 
-  if (isrcs.size > 0 && provider.supportsIsrcLookup) {
-    const hit = await firstIsrcHit(provider, isrcs, "spotify");
-    if (hit) {
-      rememberHit(deps.db, recordingId, hit, "isrc");
+  if (provider.supportsIsrcLookup) {
+    const trusted = await firstIsrcHit(provider, isrcs.trusted(), "spotify", tried);
+    if (trusted) {
+      rememberHit(deps.db, recordingId, trusted, "isrc");
+      return;
+    }
+    const derived = await firstIsrcHit(provider, isrcs.fuzzy(), "spotify", tried);
+    if (derived) {
+      rememberHit(deps.db, recordingId, derived, "isrc_from_fuzzy");
       return;
     }
   }
 
   const recording = deps.db.findRecordingById(recordingId)!;
   try {
-    const hits = await provider.search({
+    const probe = {
       title: recording.title || source.title,
-      artists: recording.artists.length ? recording.artists : source.artists,
       duration_ms: recording.duration_ms ?? source.duration_ms,
+      album: source.album,
+    };
+    const hits = await provider.search({
+      title: probe.title,
+      artists: recording.artists.length ? recording.artists : source.artists,
+      duration_ms: probe.duration_ms,
+      acceptHits: (candidates) => pickFuzzyMatch(probe, candidates) !== null,
     });
     const picked = pickFuzzyMatch(
       {
@@ -383,7 +426,7 @@ function fillUnmatched(deps: ResolveDeps, recordingId: string): void {
       confidence: 0,
       method: null,
       unmatched: true,
-      skip_reason: provider.enabled ? "unmatched" : "credentials_missing",
+      skip_reason: provider.skipReason?.() ?? (provider.enabled ? "unmatched" : "credentials_missing"),
     });
   }
 }
@@ -392,12 +435,31 @@ function collectIsrcs(hit: TrackHit): string[] {
   return uniqueIsrcs([hit.isrc, ...(hit.isrcs ?? [])]);
 }
 
-function addIsrcsFromHit(isrcs: Set<string>, hit: TrackHit): void {
-  addIsrcs(isrcs, collectIsrcs(hit));
-}
+class IsrcBag {
+  private readonly origins = new Map<string, IsrcOrigin>();
 
-function addIsrcs(isrcs: Set<string>, values: Array<string | null | undefined> | string[]): void {
-  for (const value of uniqueIsrcs(values)) isrcs.add(value);
+  get size(): number {
+    return this.origins.size;
+  }
+
+  add(values: Array<string | null | undefined> | string[], origin: IsrcOrigin): void {
+    for (const value of uniqueIsrcs(values)) {
+      if (this.origins.get(value) === "trusted") continue;
+      this.origins.set(value, origin);
+    }
+  }
+
+  trusted(): string[] {
+    return this.list("trusted");
+  }
+
+  fuzzy(): string[] {
+    return this.list("fuzzy");
+  }
+
+  private list(origin: IsrcOrigin): string[] {
+    return [...this.origins.entries()].filter(([, value]) => value === origin).map(([isrc]) => isrc);
+  }
 }
 
 function uniqueIsrcs(values: Array<string | null | undefined>): string[] {
@@ -416,10 +478,14 @@ function hasMatch(db: Store, recordingId: string, platform: Platform): boolean {
 
 async function firstIsrcHit(
   provider: Provider,
-  isrcs: Set<string>,
+  isrcs: string[],
   platform: Platform,
+  tried: Set<string>,
 ): Promise<TrackHit | null> {
   for (const isrc of isrcs) {
+    const key = `${platform}:${isrc}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
     try {
       const hit = await provider.getByIsrc(isrc);
       if (hit) return hit;

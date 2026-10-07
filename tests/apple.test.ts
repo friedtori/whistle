@@ -52,4 +52,12 @@ describe("Apple catalog + PEM", () => {
     expect(urls.some((url) => url.includes("api.music.apple.com"))).toBe(true);
     expect(urls.some((url) => url.includes("itunes.apple.com"))).toBe(false);
   });
+
+  it("surfaces catalog 401 as credentials_missing", async () => {
+    const provider = createAppleProvider(catalogConfig, async <T>() => {
+      return { ok: false, status: 401, json: null, text: "unauthorized" } as JsonResponse<T>;
+    });
+    await provider.getByIsrc("USUG11904206");
+    expect(provider.skipReason?.()).toBe("credentials_missing");
+  });
 });

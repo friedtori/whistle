@@ -88,6 +88,51 @@ describe("resolution pipeline", () => {
     });
   });
 
+  it("does not launder fuzzy MusicBrainz ISRCs into 0.98 isrc matches", async () => {
+    const trusted = "USTRT0000001";
+    const poisoned = "USPOI0000002";
+    const tried: string[] = [];
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer", { isrc: trusted }) },
+      }),
+      apple: {
+        ...stubProvider("apple"),
+        async getByIsrc(isrc) {
+          tried.push(`apple:${isrc}`);
+          return isrc === poisoned
+            ? hit("apple", { id: "bad", url: "https://music.apple.com/us/song/bad", isrc: poisoned })
+            : null;
+        },
+      },
+      musicbrainz: stubMb({
+        searchHits: [
+          hit("musicbrainz", {
+            id: "mb-wrong",
+            mbid: "mb-wrong",
+            isrc: poisoned,
+            isrcs: [poisoned],
+          }),
+        ],
+      }),
+    });
+
+    const result = await resolveTrack(
+      { url: "https://www.deezer.com/track/916424" },
+      { db: memoryStore(), providers },
+    );
+
+    const apple = result.links.find((l) => l.platform === "apple")!;
+    expect(apple).toMatchObject({
+      unmatched: false,
+      method: "isrc_from_fuzzy",
+      confidence: 0.8 * 0.98,
+    });
+    expect(result.identifiers.some((id) => id.kind === "isrc" && id.value === trusted)).toBe(true);
+    expect(result.identifiers.some((id) => id.kind === "isrc" && id.value === poisoned)).toBe(false);
+    expect(tried.filter((key) => key === "apple:USTRT0000001")).toHaveLength(1);
+  });
+
   it("retries sibling ISRCs from MusicBrainz before fuzzy when the primary misses", async () => {
     const primary = "USPRI0000001";
     const sibling = "USSIB0000002";
@@ -247,7 +292,10 @@ describe("resolution pipeline", () => {
       method: "fuzzy",
       url: BLINDING_LIGHTS.urls.deezer,
     });
-    expect(result.links.find((l) => l.platform === "apple")?.method).toBe("isrc");
+    expect(result.links.find((l) => l.platform === "apple")).toMatchObject({
+      method: "isrc_from_fuzzy",
+      confidence: 0.8 * 0.98,
+    });
 
     const again = await resolveTrack(
       { artist: "the weeknd", title: "blinding lights", duration_ms: 200_040 },
