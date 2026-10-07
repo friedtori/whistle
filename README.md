@@ -35,7 +35,7 @@ Requires Node 22+ (uses the built-in `node:sqlite` cache).
 | `DATABASE_PATH` | no | SQLite file; default `./data/whistle.db` |
 | `MUSICBRAINZ_USER_AGENT` | no | Descriptive UA. Default: `Whistle/1.0 ( https://github.com/friedtori/whistle )` |
 | `APPLE_MUSIC_TOKEN` | no | Pre-built MusicKit developer JWT |
-| `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` | no | Used to mint a JWT when `APPLE_MUSIC_TOKEN` is unset. `APPLE_PRIVATE_KEY` is the `.p8` PEM (`\n` escaped is fine) |
+| `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` | no | Used to mint a JWT when `APPLE_MUSIC_TOKEN` is unset. `APPLE_PRIVATE_KEY` is the `.p8` PEM (`\n` escaped or a single-line PEM is fine) |
 | `APPLE_STOREFRONT` | no | Default `us` |
 | `TIDAL_CLIENT_ID` / `TIDAL_CLIENT_SECRET` | no | Tidal Open API v2 client-credentials. Skipped when unset |
 | `TIDAL_COUNTRY` | no | Default `US` |
@@ -43,7 +43,7 @@ Requires Node 22+ (uses the built-in `node:sqlite` cache).
 | `YOUTUBE_API_KEY` | no | YouTube Data API v3; YouTube Music is fuzzy-only |
 | `WHISTLE_LIVE_TESTS` | no | Set `1` to run live provider tests |
 
-Missing credentials skip that platform; other platforms still resolve. Apple song IDs and title search fall back to the public iTunes Lookup/Search API when no MusicKit token is configured. Deezer and MusicBrainz need no keys.
+Missing credentials skip that platform; other platforms still resolve. When MusicKit catalog auth is configured, Apple lookups use the catalog API only (iTunes Search/Lookup is not used as a fallback, which avoids dead `/song/{id}` links). Without catalog auth, Apple falls back to the public iTunes Lookup/Search API. Deezer and MusicBrainz need no keys.
 
 ## API
 
@@ -62,10 +62,11 @@ v1 platforms: `apple`, `deezer`, `tidal`, `musicbrainz`, `spotify`, `ytm`.
 ### Pipeline
 
 1. Cache (exact input identifier, including a normalized `query` key for artist+title+duration, plus album when sent)
-2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates
-3. MusicBrainz URL relations
-4. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict
-5. Spotify last (ISRC, then search). Never used as the sole authority for other platforms
+2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates. All `isrc` method links use confidence `0.98`; a direct platform+id match on its own platform stays `1`
+3. MusicBrainz sibling ISRCs on the same recording, then a second ISRC pass (still `method: isrc` / `0.98`) before fuzzy
+4. MusicBrainz URL relations
+5. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict. Deezer/Spotify/MusicBrainz retry a plain `artist title` query when the strict fielded search returns no hits
+6. Spotify last (ISRC, then search). Never used as the sole authority for other platforms
 
 Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, share version keywords, and have case-insensitive artist token overlap. Optional `album` is a soft preference: matching album titles win, and obvious compilations (`greatest hits`, `the collection`, …) are downranked unless they are the only match or the query album itself looks like a compilation. The bootstrap platform link is stored with `method: "fuzzy"`. If search finds no accepted hit, the API returns `404 not_found`.
 

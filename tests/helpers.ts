@@ -35,6 +35,7 @@ export function hit(platform: Platform, overrides: Partial<TrackHit> = {}): Trac
     duration_ms: overrides.duration_ms ?? BLINDING_LIGHTS.duration_ms,
     album: overrides.album,
     isrc: overrides.isrc === undefined ? BLINDING_LIGHTS.isrc : overrides.isrc,
+    isrcs: overrides.isrcs,
     mbid: overrides.mbid ?? (platform === "musicbrainz" ? BLINDING_LIGHTS.ids.musicbrainz : null),
   };
 }
@@ -75,7 +76,18 @@ export function stubMb(opts: {
       return opts.byUrl?.[url] ?? null;
     },
     async getUrlRelations() {
-      return opts.relations ?? [];
+      const isrcs = new Set<string>();
+      for (const hit of Object.values(opts.byIsrc ?? {})) {
+        if (!hit) continue;
+        if (hit.isrc) isrcs.add(hit.isrc);
+        for (const sibling of hit.isrcs ?? []) isrcs.add(sibling);
+      }
+      for (const hit of Object.values(opts.byId ?? {})) {
+        if (!hit) continue;
+        if (hit.isrc) isrcs.add(hit.isrc);
+        for (const sibling of hit.isrcs ?? []) isrcs.add(sibling);
+      }
+      return { relations: opts.relations ?? [], isrcs: [...isrcs] };
     },
   };
 }

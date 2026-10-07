@@ -2,6 +2,7 @@ import type { Config } from "../config.ts";
 import { hasSpotifyAuth } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
 import { asArray, asNumber, asString, httpJson } from "../http.ts";
+import { searchWithPlainFallback } from "./search.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
 interface TokenState {
@@ -62,13 +63,18 @@ export function createSpotifyProvider(config: Config): Provider {
       return fromTrack(json?.tracks?.items?.[0] ?? null);
     },
     async search(query: SearchQuery) {
-      const q = `track:${query.title} artist:${query.artists[0] ?? ""}`;
-      const json = await spotifyGet<{ tracks?: { items?: SpotifyTrack[] } }>(
-        `/search?q=${encodeURIComponent(q)}&type=track&limit=8`,
+      return searchWithPlainFallback(
+        query,
+        `track:${query.title} artist:${query.artists[0] ?? ""}`,
+        async (q) => {
+          const json = await spotifyGet<{ tracks?: { items?: SpotifyTrack[] } }>(
+            `/search?q=${encodeURIComponent(q)}&type=track&limit=8`,
+          );
+          return asArray(json?.tracks?.items)
+            .map((item) => fromTrack(item as SpotifyTrack))
+            .filter((x): x is TrackHit => x !== null);
+        },
       );
-      return asArray(json?.tracks?.items)
-        .map((item) => fromTrack(item as SpotifyTrack))
-        .filter((x): x is TrackHit => x !== null);
     },
   };
 }

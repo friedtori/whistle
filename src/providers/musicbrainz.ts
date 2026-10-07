@@ -1,5 +1,6 @@
 import { canonicalUrl, parsePlatformFromUrl } from "../ids.ts";
 import { asArray, asNumber, asRecord, asString, httpJson, sleep } from "../http.ts";
+import { searchWithPlainFallback } from "./search.ts";
 import type { MusicBrainzProvider, SearchQuery, TrackHit, UrlRelation } from "../types.ts";
 
 interface MbRecording {
@@ -53,12 +54,15 @@ export function createMusicBrainzProvider(userAgent: string): MusicBrainzProvide
         const hi = query.duration_ms + 2000;
         parts.push(`dur:[${lo} TO ${hi}]`);
       }
-      const json = await mbGet<{ recordings?: MbRecording[] }>(
-        `recording?query=${encodeURIComponent(parts.join(" AND "))}&limit=8&fmt=json`,
-      );
-      return asArray(json?.recordings)
-        .map((item) => toHit(item as MbRecording))
-        .filter((x): x is TrackHit => x !== null);
+      const fetchHits = async (q: string) => {
+        const json = await mbGet<{ recordings?: MbRecording[] }>(
+          `recording?query=${encodeURIComponent(q)}&limit=8&fmt=json`,
+        );
+        return asArray(json?.recordings)
+          .map((item) => toHit(item as MbRecording))
+          .filter((x): x is TrackHit => x !== null);
+      };
+      return searchWithPlainFallback(query, parts.join(" AND "), fetchHits);
     },
     async getByUrl(url) {
       const variants = urlVariants(url);
@@ -79,15 +83,15 @@ export function createMusicBrainzProvider(userAgent: string): MusicBrainzProvide
       const json = await mbGet<MbRecording>(
         `recording/${encodeURIComponent(mbid)}?inc=url-rels+isrcs+artist-credits&fmt=json`,
       );
-      if (!json) return [];
-      const out: UrlRelation[] = [];
+      if (!json) return { relations: [], isrcs: [] };
+      const relations: UrlRelation[] = [];
       for (const rel of json.relations ?? []) {
         const resource = asString(rel.url?.resource);
         if (!resource) continue;
         const parsed = parsePlatformFromUrl(resource);
-        if (parsed) out.push(parsed);
+        if (parsed) relations.push(parsed);
       }
-      return out;
+      return { relations, isrcs: normalizeIsrcList(json.isrcs) };
     },
   };
 }
@@ -99,6 +103,9 @@ function toHit(raw: MbRecording, isrc?: string): TrackHit | null {
   const artists = (raw["artist-credit"] ?? [])
     .map((credit) => asString(credit.name) ?? asString(credit.artist?.name))
     .filter((name): name is string => Boolean(name));
+  const isrcs = normalizeIsrcList(raw.isrcs);
+  const primary = isrc ? normalizeIsrcValue(isrc) : (isrcs[0] ?? null);
+  if (primary && !isrcs.includes(primary)) isrcs.unshift(primary);
   return {
     platform: "musicbrainz",
     id,
@@ -106,9 +113,23 @@ function toHit(raw: MbRecording, isrc?: string): TrackHit | null {
     title,
     artists,
     duration_ms: asNumber(raw.length),
-    isrc: isrc ?? raw.isrcs?.[0] ?? null,
+    isrc: primary,
+    isrcs,
     mbid: id,
   };
+}
+
+function normalizeIsrcValue(value: string): string {
+  return value.toUpperCase().replace(/[-\s]/g, "");
+}
+
+function normalizeIsrcList(values: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const value of values ?? []) {
+    const normalized = normalizeIsrcValue(value);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
 }
 
 function escapeLucene(value: string): string {

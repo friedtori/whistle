@@ -46,14 +46,93 @@ describe("resolution pipeline", () => {
       method: "isrc",
       url: BLINDING_LIGHTS.urls.deezer,
     });
-    expect(byPlatform.deezer.confidence).toBeGreaterThan(0);
+    expect(byPlatform.deezer.confidence).toBe(0.98);
     expect(byPlatform.apple.method).toBe("isrc");
+    expect(byPlatform.apple.confidence).toBe(0.98);
     expect(byPlatform.spotify.method).toBe("mb_relation");
     expect(byPlatform.tidal.unmatched).toBe(true);
     expect(byPlatform.tidal.confidence).toBe(0);
     expect(byPlatform.ytm.unmatched).toBe(true);
     expect(byPlatform.ytm).toHaveProperty("method");
     expect(byPlatform.ytm).toHaveProperty("confidence");
+  });
+
+  it("scores a direct platform-id source at 1 and ISRC-only sources at 0.98", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer") },
+      }),
+      tidal: stubProvider("tidal", {
+        enabled: true,
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("tidal") },
+      }),
+    });
+
+    const byId = await resolveTrack(
+      { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer },
+      { db, providers },
+    );
+    expect(byId.links.find((l) => l.platform === "deezer")).toMatchObject({
+      method: "isrc",
+      confidence: 1,
+    });
+
+    const tidalOnly = await resolveTrack(
+      { isrc: BLINDING_LIGHTS.isrc },
+      { db: memoryStore(), providers },
+    );
+    expect(tidalOnly.links.find((l) => l.platform === "tidal")).toMatchObject({
+      method: "isrc",
+      confidence: 0.98,
+    });
+  });
+
+  it("retries sibling ISRCs from MusicBrainz before fuzzy when the primary misses", async () => {
+    const primary = "USPRI0000001";
+    const sibling = "USSIB0000002";
+    const db = memoryStore();
+    let deezerSearchCalls = 0;
+    const siblingHit = hit("deezer", {
+      id: "555",
+      url: "https://www.deezer.com/track/555",
+      isrc: sibling,
+    });
+    const providers = mockProviders({
+      deezer: {
+        ...stubProvider("deezer"),
+        async getByIsrc(isrc) {
+          return isrc === sibling ? siblingHit : null;
+        },
+        async search() {
+          deezerSearchCalls += 1;
+          return [hit("deezer", { id: "999", url: "https://www.deezer.com/track/999" })];
+        },
+      },
+      tidal: stubProvider("tidal", {
+        enabled: true,
+        byIsrc: { [primary]: hit("tidal", { isrc: primary }) },
+      }),
+      musicbrainz: stubMb({
+        byIsrc: {
+          [primary]: hit("musicbrainz", {
+            isrc: primary,
+            isrcs: [primary, sibling],
+          }),
+        },
+      }),
+    });
+
+    const result = await resolveTrack({ isrc: primary }, { db, providers });
+    const deezer = result.links.find((l) => l.platform === "deezer")!;
+    expect(deezer).toMatchObject({
+      unmatched: false,
+      method: "isrc",
+      confidence: 0.98,
+      url: siblingHit.url,
+    });
+    expect(deezerSearchCalls).toBe(0);
+    expect(result.identifiers.some((id) => id.kind === "isrc" && id.value === sibling)).toBe(true);
   });
 
   it("normalizes a Deezer URL to a recording and fills other platforms", async () => {

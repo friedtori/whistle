@@ -61,19 +61,17 @@ export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Prom
     recording.id,
     source,
     methodForSource(parsed.kind, source),
-    parsed.kind === source.platform || parsed.kind === "isrc" ? 1 : undefined,
+    parsed.kind === source.platform ? 1 : undefined,
   );
 
   const isrcs = new Set<string>();
   if (parsed.kind === "isrc") isrcs.add(parsed.value);
-  if (source.isrc) {
-    const normalized = source.isrc.toUpperCase().replace(/[-\s]/g, "");
-    isrcs.add(normalized);
-    deps.db.addIdentifier(recording.id, "isrc", normalized);
-  }
+  addIsrcsFromHit(isrcs, source);
+  for (const isrc of isrcs) deps.db.addIdentifier(recording.id, "isrc", isrc);
 
   await runIsrcStage(deps, recording.id, isrcs);
   await runMbStage(deps, recording.id, isrcs, source);
+  await runIsrcStage(deps, recording.id, isrcs);
   await runFuzzyStage(deps, recording.id, source);
   await runSpotifyLast(deps, recording.id, isrcs, source);
   fillUnmatched(deps, recording.id);
@@ -157,8 +155,8 @@ function rememberHit(
     db.addIdentifier(recordingId, "musicbrainz", hit.id);
     db.updateRecording(recordingId, { mbid: hit.id });
   }
-  if (hit.isrc) {
-    db.addIdentifier(recordingId, "isrc", hit.isrc.toUpperCase().replace(/[-\s]/g, ""));
+  for (const isrc of collectIsrcs(hit)) {
+    db.addIdentifier(recordingId, "isrc", isrc);
   }
   if (hit.mbid) db.updateRecording(recordingId, { mbid: hit.mbid });
   const resolvedConfidence =
@@ -221,7 +219,7 @@ async function runIsrcStage(deps: ResolveDeps, recordingId: string, isrcs: Set<s
     const hit = await firstIsrcHit(provider, isrcs, platform);
     if (hit) {
       rememberHit(deps.db, recordingId, hit, "isrc");
-      if (hit.isrc) isrcs.add(hit.isrc.toUpperCase().replace(/[-\s]/g, ""));
+      addIsrcsFromHit(isrcs, hit);
     }
   }
 }
@@ -244,6 +242,7 @@ async function runMbStage(
         const hit = await mb.getByIsrc(isrc);
         if (hit?.mbid) {
           rememberHit(deps.db, recordingId, hit, "isrc");
+          addIsrcsFromHit(isrcs, hit);
           mbid = hit.mbid;
           break;
         }
@@ -263,6 +262,7 @@ async function runMbStage(
       const picked = pickFuzzyMatch(source, hits);
       if (picked) {
         rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
+        addIsrcsFromHit(isrcs, picked.hit);
         mbid = picked.hit.mbid ?? picked.hit.id;
       }
     } catch (err) {
@@ -273,7 +273,8 @@ async function runMbStage(
   if (!mbid) return;
 
   try {
-    const relations = await mb.getUrlRelations(mbid);
+    const { relations, isrcs: siblingIsrcs } = await mb.getUrlRelations(mbid);
+    addIsrcs(isrcs, siblingIsrcs);
     for (const rel of relations) {
       if (hasMatch(deps.db, recordingId, rel.platform)) continue;
       deps.db.addIdentifier(recordingId, rel.platform, rel.id);
@@ -385,6 +386,28 @@ function fillUnmatched(deps: ResolveDeps, recordingId: string): void {
       skip_reason: provider.enabled ? "unmatched" : "credentials_missing",
     });
   }
+}
+
+function collectIsrcs(hit: TrackHit): string[] {
+  return uniqueIsrcs([hit.isrc, ...(hit.isrcs ?? [])]);
+}
+
+function addIsrcsFromHit(isrcs: Set<string>, hit: TrackHit): void {
+  addIsrcs(isrcs, collectIsrcs(hit));
+}
+
+function addIsrcs(isrcs: Set<string>, values: Array<string | null | undefined> | string[]): void {
+  for (const value of uniqueIsrcs(values)) isrcs.add(value);
+}
+
+function uniqueIsrcs(values: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    const normalized = value.toUpperCase().replace(/[-\s]/g, "");
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
 }
 
 function hasMatch(db: Store, recordingId: string, platform: Platform): boolean {

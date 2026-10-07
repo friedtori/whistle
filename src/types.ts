@@ -93,6 +93,7 @@ export interface TrackHit {
   duration_ms: number | null;
   album?: string | null;
   isrc?: string | null;
+  isrcs?: string[];
   mbid?: string | null;
 }
 
@@ -119,7 +120,7 @@ export interface Provider {
 
 export interface MusicBrainzProvider extends Provider {
   getByUrl(url: string): Promise<TrackHit | null>;
-  getUrlRelations(mbid: string): Promise<UrlRelation[]>;
+  getUrlRelations(mbid: string): Promise<{ relations: UrlRelation[]; isrcs: string[] }>;
 }
 
 export type ProviderMap = {
