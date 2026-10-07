@@ -4,6 +4,7 @@ import {
   artistSimilarity,
   evaluateFuzzy,
   pickFuzzyMatch,
+  titleSimilarity,
   versionKeywordsConflict,
 } from "../src/fuzzy.ts";
 import { hit } from "./helpers.ts";
@@ -72,6 +73,45 @@ describe("fuzzy acceptance gates", () => {
     expect(artistOverlaps("The Weeknd", ["Weeknd"])).toBe(true);
     expect(artistOverlaps("The Weeknd", ["Taylor Swift"])).toBe(false);
     expect(artistSimilarity("The Weeknd", ["Taylor Swift"])).toBe(0);
+  });
+
+  it("treats collapsed titles as equal (HandsOn vs Hands On)", () => {
+    expect(titleSimilarity("HandsOn", "Hands On")).toBe(1);
+    expect(
+      evaluateFuzzy({ title: "HandsOn", duration_ms: 200_000 }, { title: "Hands On", duration_ms: 200_000 })
+        .accepted,
+    ).toBe(true);
+  });
+
+  it("rejects unrelated titles even when duration matches (title similarity floor)", () => {
+    expect(
+      evaluateFuzzy(
+        { title: "Pigwig", duration_ms: 210_000 },
+        { title: "Now We Can't Be Friends", duration_ms: 210_000 },
+      ).accepted,
+    ).toBe(false);
+    expect(
+      evaluateFuzzy({ title: "Dexter", duration_ms: 400_000 }, { title: "Nord", duration_ms: 400_000 }).accepted,
+    ).toBe(false);
+    expect(
+      evaluateFuzzy(
+        { title: "HandsOn", duration_ms: 200_000 },
+        { title: "Wild Storm", duration_ms: 200_000 },
+      ).accepted,
+    ).toBe(false);
+  });
+
+  it("rejects remix vs acapella as a version-keyword conflict (not a safe automatic match)", () => {
+    expect(versionKeywordsConflict("thicc (Fedde Le Grand remix)", "thicc (acapella)")).toBe(true);
+    expect(versionKeywordsConflict("thicc (remix)", "thicc (a cappella)")).toBe(true);
+    expect(versionKeywordsConflict("thicc (remix)", "thicc (acappella)")).toBe(true);
+    expect(versionKeywordsConflict("thicc (remix)", "thicc (a capella)")).toBe(true);
+    expect(
+      evaluateFuzzy(
+        { title: "thicc (Fedde Le Grand remix)", duration_ms: 200_000 },
+        { title: "thicc (acapella)", duration_ms: 200_000 },
+      ).accepted,
+    ).toBe(false);
   });
 
   it("prefers the candidate whose album matches the query over a compilation", () => {

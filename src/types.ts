@@ -136,6 +136,7 @@ export type ProviderMap = {
 
 export interface ResolveResponse {
   recording: Recording;
+  recording_confidence: number;
   identifiers: Array<{ kind: IdentifierKind; value: string }>;
   links: PlatformLink[];
   cached: boolean;

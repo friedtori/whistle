@@ -11,7 +11,10 @@ const VERSION_FAMILIES: Array<{ family: string; pattern: RegExp }> = [
   { family: "instrumental", pattern: /\binstrumental\b/i },
   { family: "karaoke", pattern: /\bkaraoke\b/i },
   { family: "cover", pattern: /\bcover\b/i },
+  { family: "acapella", pattern: /\b(?:a\s*capp?ella|acapp?ella)\b/i },
 ];
+
+export const TITLE_SIMILARITY_FLOOR = 0.5;
 
 const ARTIST_STOP_WORDS = new Set(["the", "a", "an", "and", "of", "feat", "ft", "featuring"]);
 
@@ -52,11 +55,16 @@ export function normalizeTitle(title: string): string {
     .trim();
 }
 
+export function collapseTitle(title: string): string {
+  return normalizeTitle(title).replace(/\s+/g, "");
+}
+
 export function titleSimilarity(a: string, b: string): number {
   const na = normalizeTitle(a);
   const nb = normalizeTitle(b);
   if (!na || !nb) return 0;
   if (na === nb) return 1;
+  if (collapseTitle(a) === collapseTitle(b)) return 1;
   if (na.includes(nb) || nb.includes(na)) return 0.85;
   const ta = new Set(na.split(" "));
   const tb = new Set(nb.split(" "));
@@ -126,10 +134,37 @@ export function evaluateFuzzy(
   if (versionKeywordsConflict(source.title, candidate.title)) {
     return { accepted: false, confidence: 0, reason: "version_keyword" };
   }
-  const durDiff = Math.abs((source.duration_ms ?? 0) - (candidate.duration_ms ?? 0));
   const sim = titleSimilarity(source.title, candidate.title);
+  if (sim < TITLE_SIMILARITY_FLOOR) {
+    return { accepted: false, confidence: 0, reason: "title" };
+  }
+  const durDiff = Math.abs((source.duration_ms ?? 0) - (candidate.duration_ms ?? 0));
   const confidence = Math.min(0.8, 0.5 + 0.2 * (1 - durDiff / DURATION_GATE_MS) + 0.15 * sim);
   return { accepted: true, confidence };
+}
+
+/** Destination hops: reject contradictory metadata; missing fields are not contradictions. */
+export function destinationMatchesRecording(
+  recording: { title: string; artists: string[]; duration_ms: number | null },
+  hit: Pick<TrackHit, "title" | "artists" | "duration_ms">,
+): boolean {
+  if (titleSimilarity(recording.title, hit.title) < TITLE_SIMILARITY_FLOOR) return false;
+  if (versionKeywordsConflict(recording.title, hit.title)) return false;
+  if (
+    recording.duration_ms != null &&
+    hit.duration_ms != null &&
+    !durationWithinGate(recording.duration_ms, hit.duration_ms)
+  ) {
+    return false;
+  }
+  if (
+    recording.artists.length > 0 &&
+    hit.artists.length > 0 &&
+    !artistOverlaps(recording.artists.join(" "), hit.artists)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function pickFuzzyMatch(

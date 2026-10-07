@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { evaluateFuzzy } from "../src/fuzzy.ts";
 import { resolveTrack } from "../src/pipeline.ts";
 import {
   BLINDING_LIGHTS,
@@ -34,6 +35,7 @@ describe("resolution pipeline", () => {
     const result = await resolveTrack({ isrc: BLINDING_LIGHTS.isrc }, { db, providers });
 
     expect(result.cached).toBe(false);
+    expect(result.recording_confidence).toBe(0.98);
     expect(result.recording.title).toBe("Blinding Lights");
     expect(result.recording.artists).toContain("The Weeknd");
     expect(result.identifiers.some((id) => id.kind === "isrc" && id.value === BLINDING_LIGHTS.isrc)).toBe(
@@ -73,6 +75,7 @@ describe("resolution pipeline", () => {
       { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer },
       { db, providers },
     );
+    expect(byId.recording_confidence).toBe(1);
     expect(byId.links.find((l) => l.platform === "deezer")).toMatchObject({
       method: "isrc",
       confidence: 1,
@@ -409,5 +412,309 @@ describe("resolution pipeline", () => {
     const result = await resolveTrack({ isrc: BLINDING_LIGHTS.isrc }, { db, providers });
     expect(order[order.length - 1]).toBe("spotify-search");
     expect(result.links.find((l) => l.platform === "spotify")?.method).toBe("fuzzy");
+  });
+
+  it("404s artist+title when the only search hit is an unrelated title (Pigwig)", async () => {
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [
+          hit("deezer", {
+            title: "Now We Can't Be Friends",
+            artists: ["Bloc Party"],
+            duration_ms: 210_000,
+          }),
+        ],
+      }),
+    });
+    await expect(
+      resolveTrack(
+        { artist: "Bloc Party", title: "Pigwig", duration_ms: 210_000 },
+        { db: memoryStore(), providers },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("404s HandsOn when the only hit is Wild Storm, and accepts Hands On", async () => {
+    await expect(
+      resolveTrack(
+        { artist: "Empress Of", title: "HandsOn", duration_ms: 200_000 },
+        {
+          db: memoryStore(),
+          providers: mockProviders({
+            deezer: stubProvider("deezer", {
+              searchHits: [
+                hit("deezer", {
+                  title: "Wild Storm",
+                  artists: ["Empress Of"],
+                  duration_ms: 200_000,
+                }),
+              ],
+            }),
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+
+    const handsOn = hit("deezer", {
+      id: "hands-on",
+      title: "Hands On",
+      artists: ["Empress Of"],
+      duration_ms: 200_000,
+      isrc: null,
+      url: "https://www.deezer.com/track/handson",
+    });
+    const accepted = await resolveTrack(
+      { artist: "Empress Of", title: "HandsOn", duration_ms: 200_000 },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", { searchHits: [handsOn] }),
+        }),
+      },
+    );
+    expect(accepted.recording.title).toBe("Hands On");
+    expect(accepted.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: handsOn.url,
+    });
+  });
+
+  it("404s Dexter when the only search hit is Nord", async () => {
+    await expect(
+      resolveTrack(
+        { artist: "Ricardo Villalobos", title: "Dexter", duration_ms: 400_000 },
+        {
+          db: memoryStore(),
+          providers: mockProviders({
+            deezer: stubProvider("deezer", {
+              searchHits: [
+                hit("deezer", {
+                  title: "Nord",
+                  artists: ["Ricardo Villalobos"],
+                  duration_ms: 400_000,
+                }),
+              ],
+            }),
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("keeps Storm Mother and leaves a contradictory Apple ISRC/search hit unmatched", async () => {
+    const duration_ms = 360_000;
+    const isrc = "GBDNH2000001";
+    const deezerHit = hit("deezer", {
+      id: "storm-dz",
+      title: "Storm Mother",
+      artists: ["Lord Of The Isles"],
+      duration_ms,
+      isrc,
+      url: "https://www.deezer.com/track/storm",
+    });
+    const wrongApple = hit("apple", {
+      id: "wrong-apple",
+      title: "A Different Storm",
+      artists: ["Lord Of The Isles"],
+      duration_ms: duration_ms + 800,
+      isrc,
+      url: "https://music.apple.com/us/song/wrong",
+    });
+    const mbHit = hit("musicbrainz", {
+      title: "Storm Mother",
+      artists: ["Lord Of The Isles"],
+      duration_ms,
+      isrc,
+    });
+    const result = await resolveTrack(
+      { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", {
+            searchHits: [deezerHit],
+            byIsrc: { [isrc]: deezerHit },
+          }),
+          apple: stubProvider("apple", {
+            byIsrc: { [isrc]: wrongApple },
+            searchHits: [wrongApple],
+          }),
+          musicbrainz: stubMb({ searchHits: [mbHit] }),
+        }),
+      },
+    );
+
+    expect(result.recording.title).toBe("Storm Mother");
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: deezerHit.url,
+    });
+    expect(result.links.find((l) => l.platform === "apple")).toMatchObject({
+      unmatched: true,
+      url: null,
+      skip_reason: "destination_mismatch",
+    });
+    expect(result.links.find((l) => l.platform === "musicbrainz")).toMatchObject({
+      unmatched: false,
+    });
+  });
+
+  it("does not attach a contradictory or unread MusicBrainz Apple relation", async () => {
+    const duration_ms = 220_000;
+    const deezerHit = hit("deezer", {
+      id: "storm-dz",
+      title: "Storm Mother",
+      artists: ["Lord Of The Isles"],
+      duration_ms,
+      isrc: "GBDNH2000001",
+      url: "https://www.deezer.com/track/storm",
+    });
+    const mbHit = hit("musicbrainz", {
+      title: "Storm Mother",
+      artists: ["Lord Of The Isles"],
+      duration_ms,
+      isrc: deezerHit.isrc,
+    });
+    const wrongApple = hit("apple", {
+      id: "wrong-apple",
+      title: "A Different Storm",
+      artists: ["Lord Of The Isles"],
+      duration_ms,
+      url: "https://music.apple.com/us/song/wrong",
+    });
+
+    const contradicted = await resolveTrack(
+      { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", { searchHits: [deezerHit] }),
+          apple: stubProvider("apple", { byId: { [wrongApple.id]: wrongApple } }),
+          musicbrainz: stubMb({
+            searchHits: [mbHit],
+            relations: [
+              {
+                platform: "apple",
+                id: wrongApple.id,
+                url: wrongApple.url,
+              },
+            ],
+          }),
+        }),
+      },
+    );
+    expect(contradicted.recording.title).toBe("Storm Mother");
+    expect(contradicted.links.find((l) => l.platform === "apple")).toMatchObject({
+      unmatched: true,
+      url: null,
+      skip_reason: "destination_mismatch",
+    });
+
+    const unread = await resolveTrack(
+      { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", { searchHits: [deezerHit] }),
+          apple: stubProvider("apple", { byId: {} }),
+          musicbrainz: stubMb({
+            searchHits: [mbHit],
+            relations: [
+              {
+                platform: "apple",
+                id: "missing-apple",
+                url: "https://music.apple.com/us/song/missing",
+              },
+            ],
+          }),
+        }),
+      },
+    );
+    expect(unread.recording.title).toBe("Storm Mother");
+    expect(unread.links.find((l) => l.platform === "apple")).toMatchObject({
+      unmatched: true,
+      url: null,
+    });
+    expect(unread.links.find((l) => l.platform === "apple")?.url).toBeNull();
+  });
+
+  it("404s a remix query against an acapella-only hit, and accepts a remix hit", async () => {
+    const duration_ms = 200_000;
+    await expect(
+      resolveTrack(
+        { artist: "Shygirl", title: "thicc (Fedde Le Grand remix)", duration_ms },
+        {
+          db: memoryStore(),
+          providers: mockProviders({
+            deezer: stubProvider("deezer", {
+              searchHits: [
+                hit("deezer", {
+                  title: "thicc (acapella)",
+                  artists: ["Shygirl"],
+                  duration_ms,
+                }),
+              ],
+            }),
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+
+    const remix = hit("deezer", {
+      id: "thicc-remix",
+      title: "thicc (Fedde Le Grand remix)",
+      artists: ["Shygirl"],
+      duration_ms,
+      isrc: null,
+      url: "https://www.deezer.com/track/thicc-remix",
+    });
+    const accepted = await resolveTrack(
+      { artist: "Shygirl", title: "thicc (Fedde Le Grand remix)", duration_ms },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", { searchHits: [remix] }),
+        }),
+      },
+    );
+    expect(accepted.recording.title).toBe("thicc (Fedde Le Grand remix)");
+    expect(accepted.links.find((l) => l.platform === "deezer")?.url).toBe(remix.url);
+  });
+
+  it("exposes recording_confidence from the fuzzy selection and does not raise it on ISRC hops", async () => {
+    const expected = evaluateFuzzy(
+      { title: "Blinding Lights", duration_ms: BLINDING_LIGHTS.duration_ms },
+      { title: "Blinding Lights", duration_ms: BLINDING_LIGHTS.duration_ms },
+    ).confidence;
+    expect(expected).not.toBe(0.65);
+
+    const result = await resolveTrack(
+      { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+      {
+        db: memoryStore(),
+        providers: mockProviders({
+          deezer: stubProvider("deezer", {
+            searchHits: [hit("deezer")],
+            byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
+          }),
+          apple: stubProvider("apple", {
+            byIsrc: { [BLINDING_LIGHTS.isrc]: hit("apple") },
+          }),
+        }),
+      },
+    );
+
+    expect(result.recording_confidence).toBe(expected);
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      method: "fuzzy",
+      confidence: expected,
+    });
+    expect(result.links.find((l) => l.platform === "apple")).toMatchObject({
+      method: "isrc_from_fuzzy",
+      confidence: 0.8 * 0.98,
+    });
+    expect(result.recording_confidence).not.toBe(0.98);
   });
 });
