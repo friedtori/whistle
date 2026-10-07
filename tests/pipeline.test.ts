@@ -143,6 +143,117 @@ describe("resolution pipeline", () => {
     expect(isrcCalls).toBe(1);
   });
 
+  it("resolves by artist+title via Deezer search and marks the source link fuzzy", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer")],
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
+      }),
+      apple: stubProvider("apple", {
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("apple") },
+      }),
+    });
+
+    const result = await resolveTrack(
+      { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+      { db, providers },
+    );
+
+    expect(result.cached).toBe(false);
+    expect(result.recording.title).toBe("Blinding Lights");
+    expect(result.identifiers.some((id) => id.kind === "query")).toBe(true);
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: BLINDING_LIGHTS.urls.deezer,
+    });
+    expect(result.links.find((l) => l.platform === "apple")?.method).toBe("isrc");
+
+    const again = await resolveTrack(
+      { artist: "the weeknd", title: "blinding lights", duration_ms: 200_040 },
+      { db, providers },
+    );
+    expect(again.cached).toBe(true);
+    expect(again.recording.id).toBe(result.recording.id);
+  });
+
+  it("bootstraps artist+title+album onto the studio album, not a compilation", async () => {
+    const db = memoryStore();
+    const studio = hit("deezer", {
+      id: "111",
+      title: "Ironic",
+      artists: ["Alanis Morissette"],
+      album: "Jagged Little Pill",
+      duration_ms: 230_000,
+      isrc: "USMC19500123",
+      url: "https://www.deezer.com/track/111",
+    });
+    const compilation = hit("deezer", {
+      id: "222",
+      title: "Ironic",
+      artists: ["Alanis Morissette"],
+      album: "The Collection",
+      duration_ms: 230_000,
+      isrc: "OTHER00000000",
+      url: "https://www.deezer.com/track/222",
+    });
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [compilation, studio],
+        byIsrc: { [studio.isrc!]: studio },
+      }),
+    });
+
+    const result = await resolveTrack(
+      {
+        artist: "Alanis Morissette",
+        title: "Ironic",
+        album: "Jagged Little Pill",
+        duration_ms: 230_000,
+      },
+      { db, providers },
+    );
+
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: studio.url,
+    });
+  });
+
+  it("rejects artist+title bootstrap when only a remaster or wrong artist is found", async () => {
+    const db = memoryStore();
+    const remasterProviders = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [
+          hit("deezer", {
+            title: "Blinding Lights (Remastered)",
+            duration_ms: BLINDING_LIGHTS.duration_ms,
+          }),
+        ],
+      }),
+    });
+    await expect(
+      resolveTrack(
+        { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+        { db, providers: remasterProviders },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+
+    const wrongArtist = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer", { artists: ["Someone Else"] })],
+      }),
+    });
+    await expect(
+      resolveTrack(
+        { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+        { db, providers: wrongArtist },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
   it("resolves Spotify last via title search and never uses it to seed earlier platforms", async () => {
     const order: string[] = [];
     const db = memoryStore();

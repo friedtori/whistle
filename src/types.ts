@@ -17,6 +17,7 @@ export const IDENTIFIER_KINDS = [
   "tidal",
   "ytm",
   "musicbrainz",
+  "query",
 ] as const;
 
 export type IdentifierKind = (typeof IDENTIFIER_KINDS)[number];
@@ -65,6 +66,10 @@ export interface ParsedInput {
   kind: IdentifierKind;
   value: string;
   url?: string;
+  artist?: string;
+  title?: string;
+  album?: string;
+  duration_ms?: number;
 }
 
 export interface ResolveQuery {
@@ -72,6 +77,11 @@ export interface ResolveQuery {
   platform?: string;
   id?: string;
   url?: string;
+  artist?: string;
+  title?: string;
+  album?: string;
+  duration_ms?: number | string;
+  duration?: number | string;
 }
 
 export interface TrackHit {
@@ -81,6 +91,7 @@ export interface TrackHit {
   title: string;
   artists: string[];
   duration_ms: number | null;
+  album?: string | null;
   isrc?: string | null;
   mbid?: string | null;
 }

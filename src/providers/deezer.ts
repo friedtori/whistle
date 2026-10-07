@@ -9,6 +9,7 @@ interface DeezerTrack {
   isrc?: string;
   link?: string;
   artist?: { name?: string };
+  album?: { title?: string };
   contributors?: Array<{ name?: string }>;
   error?: { code?: number; message?: string };
 }
@@ -56,6 +57,7 @@ function toHit(raw: DeezerTrack | null): TrackHit | null {
     title: raw.title,
     artists,
     duration_ms: asNumber(raw.duration) != null ? raw.duration! * 1000 : null,
+    album: asString(raw.album?.title),
     isrc: asString(raw.isrc),
   };
 }

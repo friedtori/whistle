@@ -7,7 +7,13 @@ const VERSION_FAMILIES: Array<{ family: string; pattern: RegExp }> = [
   { family: "remix", pattern: /\b(?:re-?mix(?:ed)?|rmx)\b/i },
   { family: "edit", pattern: /\b(?:re-?edits?|edits?)\b/i },
   { family: "remaster", pattern: /\bre-?masters?(?:ed)?\b/i },
+  { family: "acoustic", pattern: /\bacoustic\b/i },
+  { family: "instrumental", pattern: /\binstrumental\b/i },
+  { family: "karaoke", pattern: /\bkaraoke\b/i },
+  { family: "cover", pattern: /\bcover\b/i },
 ];
+
+const ARTIST_STOP_WORDS = new Set(["the", "a", "an", "and", "of", "feat", "ft", "featuring"]);
 
 export function versionFamilies(title: string): Set<string> {
   const found = new Set<string>();
@@ -60,6 +66,50 @@ export function titleSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+export function artistTokens(raw: string): Set<string> {
+  return new Set(
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((token) => token && !ARTIST_STOP_WORDS.has(token)),
+  );
+}
+
+export function artistSimilarity(queryArtist: string, candidateArtists: string[] | string): number {
+  const query = artistTokens(queryArtist);
+  const candidate = artistTokens(
+    Array.isArray(candidateArtists) ? candidateArtists.join(" ") : candidateArtists,
+  );
+  if (query.size === 0 || candidate.size === 0) return 0;
+  let inter = 0;
+  for (const token of query) if (candidate.has(token)) inter += 1;
+  const union = new Set([...query, ...candidate]).size;
+  return union === 0 ? 0 : inter / union;
+}
+
+export function artistOverlaps(queryArtist: string, candidateArtists: string[] | string): boolean {
+  return artistSimilarity(queryArtist, candidateArtists) > 0;
+}
+
+const ALBUM_MATCH_THRESHOLD = 0.85;
+
+const COMPILATION_RE =
+  /\b(greatest hits|best of|the collection|the very best|the hits|hits collection|compilation|anthology|various artists|now that s what i call|singles(?: box| collection)?|ultimate collection)\b/;
+
+export function normalizeAlbum(album: string): string {
+  return normalizeTitle(album);
+}
+
+export function albumSimilarity(a: string, b: string): number {
+  return titleSimilarity(a, b);
+}
+
+export function isCompilationAlbum(album: string | null | undefined): boolean {
+  if (!album?.trim()) return false;
+  return COMPILATION_RE.test(normalizeAlbum(album));
+}
+
 export interface FuzzyDecision {
   accepted: boolean;
   confidence: number;
@@ -83,16 +133,48 @@ export function evaluateFuzzy(
 }
 
 export function pickFuzzyMatch(
-  source: { title: string; duration_ms: number | null },
+  source: { title: string; duration_ms: number | null; album?: string | null },
   candidates: TrackHit[],
 ): { hit: TrackHit; confidence: number } | null {
-  let best: { hit: TrackHit; confidence: number } | null = null;
+  const queryAlbum = source.album?.trim() ?? "";
+  const queryLooksCompilation = isCompilationAlbum(queryAlbum);
+
+  const accepted: Array<{
+    hit: TrackHit;
+    confidence: number;
+    albumSim: number;
+    compilation: boolean;
+  }> = [];
   for (const hit of candidates) {
     const decision = evaluateFuzzy(source, hit);
     if (!decision.accepted) continue;
-    if (!best || decision.confidence > best.confidence) {
-      best = { hit, confidence: decision.confidence };
+    accepted.push({
+      hit,
+      confidence: decision.confidence,
+      albumSim: queryAlbum && hit.album ? albumSimilarity(queryAlbum, hit.album) : 0,
+      compilation: isCompilationAlbum(hit.album),
+    });
+  }
+  if (accepted.length === 0) return null;
+
+  let pool = accepted;
+  if (queryAlbum) {
+    const albumMatches = accepted.filter((item) => item.albumSim >= ALBUM_MATCH_THRESHOLD);
+    if (albumMatches.length > 0) {
+      pool = albumMatches;
+    } else if (!queryLooksCompilation) {
+      const nonCompilations = accepted.filter((item) => !item.compilation);
+      if (nonCompilations.length > 0) pool = nonCompilations;
     }
   }
-  return best;
+
+  let best = pool[0];
+  for (const item of pool) {
+    if (item.albumSim > best.albumSim) {
+      best = item;
+    } else if (item.albumSim === best.albumSim && item.confidence > best.confidence) {
+      best = item;
+    }
+  }
+  return { hit: best.hit, confidence: best.confidence };
 }

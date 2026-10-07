@@ -1,5 +1,5 @@
 import type { Store } from "./db.ts";
-import { pickFuzzyMatch } from "./fuzzy.ts";
+import { artistOverlaps, pickFuzzyMatch } from "./fuzzy.ts";
 import { HttpError, canonicalUrl, parseInput } from "./ids.ts";
 import type {
   IdentifierKind,
@@ -17,6 +17,7 @@ import { PLATFORMS } from "./types.ts";
 
 const ISRC_STAGE: Platform[] = ["deezer", "apple", "tidal", "musicbrainz"];
 const FUZZY_STAGE: Platform[] = ["deezer", "apple", "tidal", "ytm", "musicbrainz"];
+const SEARCH_BOOTSTRAP: Platform[] = ["deezer", "apple", "tidal"];
 
 const CONFIDENCE = {
   isrc: 0.98,
@@ -36,9 +37,21 @@ export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Prom
     return present(deps.db, cached, true);
   }
 
-  const source = await fetchSource(parsed, deps.providers);
+  const source =
+    parsed.kind === "query"
+      ? await bootstrapFromSearch(parsed, deps.providers)
+      : await fetchSource(
+          { kind: parsed.kind, value: parsed.value, url: parsed.url },
+          deps.providers,
+        );
   if (!source) {
-    throw new HttpError(404, "not_found", `Could not resolve ${parsed.kind}:${parsed.value}`);
+    throw new HttpError(
+      404,
+      "not_found",
+      parsed.kind === "query"
+        ? `No fuzzy match for "${parsed.artist} – ${parsed.title}"`
+        : `Could not resolve ${parsed.kind}:${parsed.value}`,
+    );
   }
 
   const recording = findOrCreateRecording(deps.db, source);
@@ -70,7 +83,7 @@ export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Prom
 }
 
 async function fetchSource(
-  parsed: { kind: IdentifierKind; value: string; url?: string },
+  parsed: { kind: Exclude<IdentifierKind, "query">; value: string; url?: string },
   providers: ProviderMap,
 ): Promise<TrackHit | null> {
   if (parsed.kind === "isrc") {
@@ -162,10 +175,41 @@ function rememberHit(
 }
 
 function methodForSource(kind: IdentifierKind, source: TrackHit): MatchMethod {
+  if (kind === "query") return "fuzzy";
   if (kind === "isrc") return "isrc";
   if (source.platform === "musicbrainz" && kind !== "musicbrainz") return "mb_relation";
   if (kind === source.platform) return "isrc";
   return "mb_relation";
+}
+
+async function bootstrapFromSearch(
+  parsed: { artist?: string; title?: string; album?: string; duration_ms?: number },
+  providers: ProviderMap,
+): Promise<TrackHit | null> {
+  const artist = parsed.artist?.trim() ?? "";
+  const title = parsed.title?.trim() ?? "";
+  const album = parsed.album?.trim() || undefined;
+  const duration_ms = parsed.duration_ms ?? null;
+  if (!artist || !title || duration_ms == null) return null;
+
+  const probe = { title, duration_ms, album };
+  for (const platform of SEARCH_BOOTSTRAP) {
+    const provider = providers[platform];
+    if (!provider.enabled) continue;
+    try {
+      const hits = await provider.search({
+        title,
+        artists: [artist],
+        duration_ms,
+      });
+      const withArtist = hits.filter((hit) => artistOverlaps(artist, hit.artists));
+      const picked = pickFuzzyMatch(probe, withArtist);
+      if (picked) return picked.hit;
+    } catch (err) {
+      warn(platform, "search", err);
+    }
+  }
+  return null;
 }
 
 async function runIsrcStage(deps: ResolveDeps, recordingId: string, isrcs: Set<string>): Promise<void> {
@@ -266,6 +310,7 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
   const probe = {
     title: recording.title || source.title,
     duration_ms: recording.duration_ms ?? source.duration_ms,
+    album: source.album,
   };
   for (const platform of FUZZY_STAGE) {
     if (hasMatch(deps.db, recordingId, platform)) continue;
@@ -311,7 +356,11 @@ async function runSpotifyLast(
       duration_ms: recording.duration_ms ?? source.duration_ms,
     });
     const picked = pickFuzzyMatch(
-      { title: recording.title || source.title, duration_ms: recording.duration_ms ?? source.duration_ms },
+      {
+        title: recording.title || source.title,
+        duration_ms: recording.duration_ms ?? source.duration_ms,
+        album: source.album,
+      },
       hits,
     );
     if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);

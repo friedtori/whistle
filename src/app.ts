@@ -12,10 +12,19 @@ const batchItemSchema = z
     platform: z.string().optional(),
     id: z.string().optional(),
     url: z.string().optional(),
+    artist: z.string().optional(),
+    title: z.string().optional(),
+    album: z.string().optional(),
+    duration_ms: z.number().optional(),
+    duration: z.number().optional(),
   })
-  .refine((value) => Boolean(value.isrc || value.url || (value.platform && value.id)), {
-    message: "Each input needs isrc, url, or platform+id",
-  });
+  .refine(
+    (value) =>
+      Boolean(value.isrc || value.url || (value.platform && value.id) || (value.artist && value.title)),
+    {
+      message: "Each input needs isrc, url, platform+id, or artist+title",
+    },
+  );
 
 const batchSchema = z.object({
   inputs: z.array(batchItemSchema).min(1).max(100),
@@ -171,5 +180,10 @@ function resolveQueryFromRequest(req: Request): ResolveQuery {
     platform: typeof q.platform === "string" ? q.platform : undefined,
     id: typeof q.id === "string" ? q.id : undefined,
     url: typeof q.url === "string" ? q.url : undefined,
+    artist: typeof q.artist === "string" ? q.artist : undefined,
+    title: typeof q.title === "string" ? q.title : undefined,
+    album: typeof q.album === "string" ? q.album : undefined,
+    duration_ms: typeof q.duration_ms === "string" ? q.duration_ms : undefined,
+    duration: typeof q.duration === "string" ? q.duration : undefined,
   };
 }

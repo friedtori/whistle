@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeIsrc, parseInput, parseUrl } from "../src/ids.ts";
+import { normalizeIsrc, parseInput, parseUrl, queryCacheKey } from "../src/ids.ts";
 
 describe("parseUrl / parseInput", () => {
   it("parses ISRC with or without dashes", () => {
@@ -70,8 +70,45 @@ describe("parseUrl / parseInput", () => {
   });
 
   it("rejects empty and unknown inputs", () => {
-    expect(() => parseInput({})).toThrow(/isrc, url, or platform\+id/);
+    expect(() => parseInput({})).toThrow(/isrc, url, platform\+id, or artist\+title/);
     expect(() => parseInput({ platform: "qobuz", id: "1" })).toThrow(/Unsupported platform/);
     expect(() => parseInput({ isrc: "not-an-isrc" })).toThrow(/Invalid ISRC/);
+  });
+
+  it("parses artist+title with duration_ms into a stable query key", () => {
+    expect(
+      parseInput({ artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 }),
+    ).toEqual({
+      kind: "query",
+      value: queryCacheKey("The Weeknd", "Blinding Lights", 200_040),
+      artist: "The Weeknd",
+      title: "Blinding Lights",
+      duration_ms: 200_040,
+    });
+    expect(queryCacheKey("The  Weeknd", "Blinding Lights", 200_040)).toBe(
+      queryCacheKey("the weeknd", "blinding lights", 200_040),
+    );
+    expect(
+      parseInput({
+        artist: "Alanis Morissette",
+        title: "Ironic",
+        album: "Jagged Little Pill",
+        duration_ms: 230_000,
+      }),
+    ).toMatchObject({
+      kind: "query",
+      album: "Jagged Little Pill",
+      value: queryCacheKey("Alanis Morissette", "Ironic", 230_000, "Jagged Little Pill"),
+    });
+  });
+
+  it("accepts duration in seconds and requires duration for artist+title", () => {
+    expect(parseInput({ artist: "The Weeknd", title: "Blinding Lights", duration: 200.04 })).toMatchObject({
+      kind: "query",
+      duration_ms: 200_040,
+    });
+    expect(() => parseInput({ artist: "The Weeknd", title: "Blinding Lights" })).toThrow(
+      /duration_ms is required/,
+    );
   });
 });

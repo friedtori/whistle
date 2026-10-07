@@ -62,6 +62,7 @@ interface AppleSong {
   attributes?: {
     name?: string;
     artistName?: string;
+    albumName?: string;
     durationInMillis?: number;
     isrc?: string;
     url?: string;
@@ -72,6 +73,7 @@ interface ItunesTrack {
   trackId?: number;
   trackName?: string;
   artistName?: string;
+  collectionName?: string;
   trackTimeMillis?: number;
   trackViewUrl?: string;
 }
@@ -89,6 +91,7 @@ function fromCatalog(song: AppleSong): TrackHit | null {
       ? [song.attributes!.artistName!]
       : [],
     duration_ms: asNumber(song.attributes?.durationInMillis),
+    album: asString(song.attributes?.albumName),
     isrc: asString(song.attributes?.isrc),
   };
 }
@@ -104,6 +107,7 @@ function fromItunes(track: ItunesTrack): TrackHit | null {
     title: track.trackName,
     artists: asString(track.artistName) ? [track.artistName!] : [],
     duration_ms: asNumber(track.trackTimeMillis),
+    album: asString(track.collectionName),
   };
 }
 
