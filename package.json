@@ -12,7 +12,9 @@
     "start": "NODE_OPTIONS=--experimental-sqlite tsx src/server.ts",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-sqlite vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dump:seed-cases": "NODE_OPTIONS=--experimental-sqlite tsx scripts/dump-seed-cases.ts",
+    "replay:seed-archive": "NODE_OPTIONS=--experimental-sqlite tsx scripts/replay-seed-archive.ts"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

@@ -1,6 +1,6 @@
 # Whistle
 
-Hosted, developer-first music track resolver. Give it an ISRC, a platform track ID, a link that encodes one, or a title + artist + duration. Get back a **Recording** plus **PlatformLinks** for Apple Music, Deezer, Tidal, MusicBrainz, Spotify, and YouTube Music — each with `confidence` (0–1) and `method` (`isrc` | `isrc_from_fuzzy` | `mb_relation` | `fuzzy` | `user`).
+Hosted, developer-first music track resolver. Give it an ISRC, a platform track ID, a link that encodes one, or a title + artist + duration. Get back a **Recording**, `recording_confidence` (is this the right recording), and **PlatformLinks** for Apple Music, Deezer, Tidal, MusicBrainz, Spotify, and YouTube Music — each with destination `confidence` (0–1) and `method` (`isrc` | `isrc_from_fuzzy` | `mb_relation` | `fuzzy` | `user`).
 
 Whistle is an API for apps (Gum consumes it via deep links). It is not a paste-a-link marketing page.
 
@@ -43,11 +43,19 @@ Requires Node 22+ (uses the built-in `node:sqlite` cache).
 | `YOUTUBE_API_KEY` | no | YouTube Data API v3; YouTube Music is fuzzy-only |
 | `WHISTLE_LIVE_TESTS` | no | Set `1` to run live provider tests |
 
-Missing credentials skip that platform; other platforms still resolve. When MusicKit catalog auth is configured, Apple lookups use the catalog API only (iTunes Search/Lookup is not used as a fallback, which avoids dead `/song/{id}` links). Without catalog auth, Apple falls back to the public iTunes Lookup/Search API. Deezer and MusicBrainz need no keys.
+Missing credentials skip that platform; other platforms still resolve. When MusicKit catalog auth is configured, Apple lookups use the catalog API only (iTunes Search/Lookup is not used as a fallback, which avoids dead `/song/{id}` links). Without catalog auth, Apple uses public iTunes **lookup** (`lookup?id=` / `lookup?isrc=`). There is **no** `search?term=${isrc}` first-result fallback — that path returned unrelated songs whose ISRC was not the query. Deezer and MusicBrainz need no keys.
 
 ## API
 
-All resolve responses include `recording`, `identifiers`, `links[]` (`confidence` + `method` on every platform, including unmatched), and `cached`.
+All resolve responses include `recording`, `recording_confidence`, `identifiers`, `links[]` (`confidence` + `method` on every platform, including unmatched), `cached`, and `evidence` (rule version, reuse, query_match vs destinations, `providers_enabled`, `credentials_skipped` as a count — never tokens or keys).
+
+`recording_confidence` is input→recording certainty (the fuzzy selection score for artist+title, `0.98` for a trusted ISRC, `1` for a direct platform+id on its own platform). `links[].confidence` / `links[].method` are destination-hop certainty. Teleport should treat `recording_confidence` as “is this the right recording” and `link.confidence`/`method` as “is this hop faithful.” An ISRC expansion from a fuzzy source stays `isrc_from_fuzzy` at `0.8 × 0.98` and does **not** raise `recording_confidence`.
+
+Same version-family + duration is not identity: two remixes or two remasters can still auto-match, and Teleport should still review that class. Remix vs acapella (and acapella vs the original) is rejected. Destination version keywords are read from **title + album + URL slug** (hyphens → spaces), so an Apple hit titled “Problem” whose URL/album says instrumental/cover/acoustic/karaoke is unmatched. A destination hop that contradicts the chosen recording is left unmatched with `skip_reason: destination_mismatch`.
+
+`normalizeTitle` keeps Unicode letters (`\p{L}\p{N}`); Latin-only stripping would drop Cyrillic titles (AL-90) to empty and fail the title floor. When one title is non-Latin and the other is Latin (気分上々 vs Kibun Jou Jou), the title floor is skipped (transliteration hatch); artist overlap, duration, and version still apply. Same-script unrelated titles (Pigwig vs Now We Can't Be Friends) still reject.
+
+`findOrCreateRecording` will not reuse an existing row found by ISRC/mbid/platform id unless `destinationMatchesRecording` passes. SYW/HandsOn must not inherit Wild Storm’s links. Write-once `origin_confidence` stays on the reused row; this query’s uncertainty lives on `evidence.query_match`. Cached resolves and `GET /v1/recordings/:id` mark `query_match.reason = reconstructed_from_cache` and leave `query_match.confidence` null — that is not a new measurement.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -65,10 +73,14 @@ v1 platforms: `apple`, `deezer`, `tidal`, `musicbrainz`, `spotify`, `ytm`.
 2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates. Seed/input ISRCs use `method: isrc` / `0.98`; a direct platform+id match on its own platform stays `1`. ISRCs discovered via a fuzzy MusicBrainz match are tagged `isrc_from_fuzzy` at `0.8 × 0.98` and are not stored as ISRC identifiers
 3. MusicBrainz sibling ISRCs on the same recording (same provenance as the MB match), then a second ISRC pass that skips already-tried `(platform, isrc)` pairs
 4. MusicBrainz URL relations
-5. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict. Deezer/Spotify/MusicBrainz retry a plain `artist title` query when the strict fielded search returns no **accepted** hit (not only when it returns no rows). MusicBrainz plain queries escape Lucene operators; Deezer quotes the plain query so `:` is not a field separator
+5. Fuzzy title/artist search — accepted only when duration is within 2 seconds, title similarity is at least ~0.5 (collapsed titles like `HandsOn` / `Hands On` count as equal; Unicode letters kept), artists overlap when both sides have artists (featured-artist supersets count), **and** version keywords (`live`, `remix`, `edit`, `remaster`, `acapella` / `a cappella`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict on title + album + URL slug. Destination fuzzy filters by `artistOverlaps` (bootstrap already did). Destination hits that contradict the chosen recording (title / artist / duration / version) are left unmatched with `skip_reason: destination_mismatch`. Deezer/Spotify/MusicBrainz retry a plain `artist title` query when the strict fielded search returns no **accepted** hit (not only when it returns no rows). MusicBrainz plain queries escape Lucene operators; Deezer quotes the plain query so `:` is not a field separator
 6. Spotify last (trusted ISRC, then `isrc_from_fuzzy`, then search). Never used as the sole authority for other platforms
 
-Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, share version keywords, and have case-insensitive artist token overlap. Optional `album` is a soft preference: matching album titles win, and obvious compilations (`greatest hits`, `the collection`, …) are downranked unless they are the only match or the query album itself looks like a compilation. The bootstrap platform link is stored with `method: "fuzzy"`. If search finds no accepted hit, the API returns `404 not_found`.
+Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, pass the title-similarity floor, share version keywords, and have case-insensitive artist token overlap. Optional `album` is a soft preference: matching album titles win, and obvious compilations (`greatest hits`, `the collection`, …) are downranked unless they are the only match or the query album itself looks like a compilation. The bootstrap platform link is stored with `method: "fuzzy"` at the actual selection score. If search finds no accepted hit, the API returns `404 not_found`.
+
+`npm run dump:seed-cases` resolves the named seed titles (including Oh No Now My, SYW, Pigwig, HandsOn, Dexter, Storm Mother, archive thicc, Midnight Sun, Spin Spin Sugar, AL-90) against live DSPs and prints JSON plus `evidence`. Durations default to archive values; pass `--pigwig-ms=` / `--handson-ms=` / `--dexter-ms=` etc. to override. Live-only; not part of default `npm test`.
+
+`npm run replay:seed-archive` reads archive JSONL (`--fuzzy=` / `--isrc=`, or `/tmp/whistle-seed` when present) and writes `artifacts/match-correctness/`. Default is **named cases** + `--dry-fixtures` (title floor / URL version evaluation, no DSP). Pass `--all` for the full 900+374 (pace MusicBrainz) and `--live` to call `resolveTrack`. Output includes `run_id`, timestamp, `git rev-parse HEAD`, `matching_rule_version`, `providers_enabled`, `credentials_skipped`. No secrets. See `artifacts/match-correctness/BEFORE_AFTER.md`.
 
 Repeat lookups of the same input are served from the SQLite cache.
 
@@ -78,5 +90,5 @@ Rate limits are not enforced in this prototype; cache aggressively and keep Musi
 
 - **Recording**: `id`, `title`, `artists[]`, `duration_ms`, `mbid?`
 - **Identifier**: `recording_id`, `kind` (`isrc` \| `spotify` \| `apple` \| `deezer` \| `tidal` \| `ytm` \| `musicbrainz` \| `query`), `value`
-- **PlatformLink**: `id`, `recording_id`, `platform`, `url`, `duration_ms`, `confidence`, `method`, `verified_at`, `unmatched`
+- **PlatformLink**: `id`, `recording_id`, `platform`, `url`, `duration_ms`, `confidence`, `method`, `verified_at`, `unmatched`, `skip_reason?` (`destination_mismatch` when a hop was found and refused)
 - **Correction**: `link_id?`, `recording_id?`, `reason` (`wrong` \| `missing`), `submitted_at`, `status`
