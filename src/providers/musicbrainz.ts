@@ -1,6 +1,6 @@
 import { canonicalUrl, parsePlatformFromUrl } from "../ids.ts";
 import { asArray, asNumber, asRecord, asString, httpJson, sleep } from "../http.ts";
-import { searchWithPlainFallback } from "./search.ts";
+import { escapeLucene, searchWithPlainFallback } from "./search.ts";
 import type { MusicBrainzProvider, SearchQuery, TrackHit, UrlRelation } from "../types.ts";
 
 interface MbRecording {
@@ -62,7 +62,9 @@ export function createMusicBrainzProvider(userAgent: string): MusicBrainzProvide
           .map((item) => toHit(item as MbRecording))
           .filter((x): x is TrackHit => x !== null);
       };
-      return searchWithPlainFallback(query, parts.join(" AND "), fetchHits);
+      return searchWithPlainFallback(query, parts.join(" AND "), fetchHits, {
+        escapePlain: escapeLucene,
+      });
     },
     async getByUrl(url) {
       const variants = urlVariants(url);
@@ -130,10 +132,6 @@ function normalizeIsrcList(values: string[] | undefined): string[] {
     if (normalized && !out.includes(normalized)) out.push(normalized);
   }
   return out;
-}
-
-function escapeLucene(value: string): string {
-  return value.replace(/([+\-&|!(){}[\]^"~*?:\\/])/g, "\\$1");
 }
 
 function urlVariants(url: string): string[] {

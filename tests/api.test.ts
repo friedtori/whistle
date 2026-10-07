@@ -114,7 +114,7 @@ describe("HTTP API", () => {
     expect(deezer).toMatchObject({ unmatched: false, method: "fuzzy" });
     expect(res.body.links.find((link: { platform: string }) => link.platform === "apple")).toMatchObject({
       unmatched: false,
-      method: "isrc",
+      method: "isrc_from_fuzzy",
     });
 
     const viaSeconds = await request(app).get("/v1/resolve").query({

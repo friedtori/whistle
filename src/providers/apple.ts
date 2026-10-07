@@ -9,12 +9,19 @@ type HttpJson = typeof httpJson;
 
 export function createAppleProvider(config: Config, http: HttpJson = httpJson): Provider {
   const catalog = hasAppleCatalogAuth(config);
+  let catalogAuthRejected = false;
+
+  async function catalogGet<T>(url: string, token: string) {
+    const res = await http<T>(url, { headers: appleHeaders(token) });
+    if (res.status === 401 || res.status === 403) catalogAuthRejected = true;
+    return res;
+  }
 
   async function catalogSongById(id: string, token: string): Promise<TrackHit | null> {
     const store = config.appleStorefront;
-    const res = await http<{ data?: AppleSong[] }>(
+    const res = await catalogGet<{ data?: AppleSong[] }>(
       `https://api.music.apple.com/v1/catalog/${store}/songs/${encodeURIComponent(id)}`,
-      { headers: appleHeaders(token) },
+      token,
     );
     const song = res.json?.data?.[0];
     return song ? fromCatalog(song) : null;
@@ -24,6 +31,7 @@ export function createAppleProvider(config: Config, http: HttpJson = httpJson): 
     platform: "apple",
     enabled: true,
     supportsIsrcLookup: true,
+    skipReason: () => (catalogAuthRejected ? "credentials_missing" : null),
     async getById(id) {
       if (catalog) {
         return catalogSongById(id, appleToken(config));
@@ -34,9 +42,9 @@ export function createAppleProvider(config: Config, http: HttpJson = httpJson): 
       if (catalog) {
         const token = appleToken(config);
         const store = config.appleStorefront;
-        const res = await http<{ data?: AppleSong[] }>(
+        const res = await catalogGet<{ data?: AppleSong[] }>(
           `https://api.music.apple.com/v1/catalog/${store}/songs?filter[isrc]=${encodeURIComponent(isrc)}`,
-          { headers: appleHeaders(token) },
+          token,
         );
         const song = res.json?.data?.[0];
         return song ? fromCatalog(song) : null;
@@ -48,9 +56,9 @@ export function createAppleProvider(config: Config, http: HttpJson = httpJson): 
       if (catalog) {
         const token = appleToken(config);
         const store = config.appleStorefront;
-        const res = await http<{ results?: { songs?: { data?: AppleSong[] } } }>(
+        const res = await catalogGet<{ results?: { songs?: { data?: AppleSong[] } } }>(
           `https://api.music.apple.com/v1/catalog/${store}/search?term=${encodeURIComponent(term)}&types=songs&limit=8`,
-          { headers: appleHeaders(token) },
+          token,
         );
         return asArray(res.json?.results?.songs?.data)
           .map((item) => fromCatalog(item as AppleSong))

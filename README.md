@@ -1,6 +1,6 @@
 # Whistle
 
-Hosted, developer-first music track resolver. Give it an ISRC, a platform track ID, a link that encodes one, or a title + artist + duration. Get back a **Recording** plus **PlatformLinks** for Apple Music, Deezer, Tidal, MusicBrainz, Spotify, and YouTube Music — each with `confidence` (0–1) and `method` (`isrc` | `mb_relation` | `fuzzy` | `user`).
+Hosted, developer-first music track resolver. Give it an ISRC, a platform track ID, a link that encodes one, or a title + artist + duration. Get back a **Recording** plus **PlatformLinks** for Apple Music, Deezer, Tidal, MusicBrainz, Spotify, and YouTube Music — each with `confidence` (0–1) and `method` (`isrc` | `isrc_from_fuzzy` | `mb_relation` | `fuzzy` | `user`).
 
 Whistle is an API for apps (Gum consumes it via deep links). It is not a paste-a-link marketing page.
 
@@ -62,11 +62,11 @@ v1 platforms: `apple`, `deezer`, `tidal`, `musicbrainz`, `spotify`, `ytm`.
 ### Pipeline
 
 1. Cache (exact input identifier, including a normalized `query` key for artist+title+duration, plus album when sent)
-2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates. All `isrc` method links use confidence `0.98`; a direct platform+id match on its own platform stays `1`
-3. MusicBrainz sibling ISRCs on the same recording, then a second ISRC pass (still `method: isrc` / `0.98`) before fuzzy
+2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates. Seed/input ISRCs use `method: isrc` / `0.98`; a direct platform+id match on its own platform stays `1`. ISRCs discovered via a fuzzy MusicBrainz match are tagged `isrc_from_fuzzy` at `0.8 × 0.98` and are not stored as ISRC identifiers
+3. MusicBrainz sibling ISRCs on the same recording (same provenance as the MB match), then a second ISRC pass that skips already-tried `(platform, isrc)` pairs
 4. MusicBrainz URL relations
-5. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict. Deezer/Spotify/MusicBrainz retry a plain `artist title` query when the strict fielded search returns no hits
-6. Spotify last (ISRC, then search). Never used as the sole authority for other platforms
+5. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict. Deezer/Spotify/MusicBrainz retry a plain `artist title` query when the strict fielded search returns no **accepted** hit (not only when it returns no rows). MusicBrainz plain queries escape Lucene operators; Deezer quotes the plain query so `:` is not a field separator
+6. Spotify last (trusted ISRC, then `isrc_from_fuzzy`, then search). Never used as the sole authority for other platforms
 
 Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, share version keywords, and have case-insensitive artist token overlap. Optional `album` is a soft preference: matching album titles win, and obvious compilations (`greatest hits`, `the collection`, …) are downranked unless they are the only match or the query album itself looks like a compilation. The bootstrap platform link is stored with `method: "fuzzy"`. If search finds no accepted hit, the API returns `404 not_found`.
 

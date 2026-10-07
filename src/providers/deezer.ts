@@ -1,6 +1,6 @@
 import { canonicalUrl } from "../ids.ts";
 import { asArray, asNumber, asString, httpJson } from "../http.ts";
-import { searchWithPlainFallback } from "./search.ts";
+import { quoteSearchValue, searchWithPlainFallback } from "./search.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
 type HttpJson = typeof httpJson;
@@ -35,7 +35,7 @@ export function createDeezerProvider(http: HttpJson = httpJson): Provider {
     async search(query: SearchQuery) {
       return searchWithPlainFallback(
         query,
-        `artist:"${query.artists[0] ?? ""}" track:"${query.title}"`,
+        `artist:${quoteSearchValue(query.artists[0] ?? "")} track:${quoteSearchValue(query.title)}`,
         async (q) => {
           const res = await http<{ data?: DeezerTrack[] }>(
             `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=8`,
@@ -45,6 +45,7 @@ export function createDeezerProvider(http: HttpJson = httpJson): Provider {
             .map((item) => toHit(item as DeezerTrack))
             .filter((x): x is TrackHit => x !== null);
         },
+        { formatPlain: quoteSearchValue },
       );
     },
   };
