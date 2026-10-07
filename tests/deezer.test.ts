@@ -49,8 +49,9 @@ describe("Deezer search fallback", () => {
   it("retries plain search when strict hits fail the acceptance gate", async () => {
     const calls: string[] = [];
     const provider = createDeezerProvider(async <T>(url: string) => {
-      calls.push(decodeURIComponent(url));
-      if (url.includes("artist:")) {
+      const decoded = decodeURIComponent(url);
+      calls.push(decoded);
+      if (decoded.includes("artist:")) {
         return ok({
           data: [{ id: 1, title: "Narcissus (Live)", duration: 240, artist: { name: "Alanis Morissette" } }],
         }) as JsonResponse<T>;
