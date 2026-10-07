@@ -483,7 +483,7 @@ describe("resolution pipeline", () => {
   it("404s Dexter when the only search hit is Nord", async () => {
     await expect(
       resolveTrack(
-        { artist: "Ricardo Villalobos", title: "Dexter", duration_ms: 400_000 },
+        { artist: "Ricardo Villalobos", title: "Dexter", duration_ms: 549_000 },
         {
           db: memoryStore(),
           providers: mockProviders({
@@ -492,7 +492,7 @@ describe("resolution pipeline", () => {
                 hit("deezer", {
                   title: "Nord",
                   artists: ["Ricardo Villalobos"],
-                  duration_ms: 400_000,
+                  duration_ms: 549_000,
                 }),
               ],
             }),

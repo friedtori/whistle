@@ -107,7 +107,7 @@ export function createApp(deps: AppDeps): Express {
     try {
       const recording = deps.db.findRecordingById(req.params.id);
       if (!recording) throw new HttpError(404, "not_found", "Recording not found");
-      res.json(present(deps.db, recording, true));
+      res.json(present(deps.db, recording, true, { providers: deps.providers }));
     } catch (err) {
       next(err);
     }

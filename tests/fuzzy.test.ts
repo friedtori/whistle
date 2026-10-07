@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   artistOverlaps,
   artistSimilarity,
+  destinationMatchesRecording,
+  destinationVersionText,
   evaluateFuzzy,
   pickFuzzyMatch,
   titleSimilarity,
@@ -101,6 +103,16 @@ describe("fuzzy acceptance gates", () => {
     ).toBe(false);
   });
 
+  it("does not mint a perfect title score for a transliteration hatch", () => {
+    const decision = evaluateFuzzy(
+      { title: "気分上々↑↑", artists: "mihimaru GT", duration_ms: 255_000 },
+      { title: "Kibun Jou Jou", artists: ["mihimaru GT"], duration_ms: 255_000 },
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.confidence).toBeLessThan(0.8);
+    expect(titleSimilarity("気分上々↑↑", "Kibun Jou Jou")).toBe(0);
+  });
+
   it("rejects remix vs acapella as a version-keyword conflict (not a safe automatic match)", () => {
     expect(versionKeywordsConflict("thicc (Fedde Le Grand remix)", "thicc (acapella)")).toBe(true);
     expect(versionKeywordsConflict("thicc (remix)", "thicc (a cappella)")).toBe(true);
@@ -111,6 +123,55 @@ describe("fuzzy acceptance gates", () => {
         { title: "thicc (Fedde Le Grand remix)", duration_ms: 200_000 },
         { title: "thicc (acapella)", duration_ms: 200_000 },
       ).accepted,
+    ).toBe(false);
+  });
+
+  it("keeps Unicode letters so Cyrillic titles score 1 against themselves", () => {
+    expect(titleSimilarity("Завуалированный Сигнал", "Завуалированный Сигнал")).toBe(1);
+    expect(
+      evaluateFuzzy(
+        { title: "Завуалированный Сигнал", duration_ms: 306_000 },
+        { title: "Завуалированный Сигнал", duration_ms: 306_000 },
+      ).accepted,
+    ).toBe(true);
+  });
+
+  it("does not reject a Latin/non-Latin transliteration pair on title similarity alone", () => {
+    expect(
+      evaluateFuzzy(
+        { title: "気分上々↑↑", artists: "mihimaru GT", duration_ms: 200_000 },
+        { title: "Kibun Jou Jou", artists: ["mihimaru GT"], duration_ms: 200_000 },
+      ).accepted,
+    ).toBe(true);
+    expect(
+      evaluateFuzzy(
+        { title: "気分上々↑↑", artists: "mihimaru GT", duration_ms: 200_000 },
+        { title: "Kibun Jou Jou", artists: ["Harusaruhi"], duration_ms: 200_000 },
+      ).accepted,
+    ).toBe(false);
+  });
+
+  it("treats featured-artist supersets and punctuation credits as artist overlap", () => {
+    expect(artistOverlaps("Ariana Grande feat. Iggy Azalea", ["Ariana Grande"])).toBe(true);
+    expect(artistOverlaps("Ariana Grande", ["Ariana Grande", "Iggy Azalea"])).toBe(true);
+    expect(artistOverlaps("Olivia O'Brien", ["Olivia OBrien"])).toBe(true);
+  });
+
+  it("scans destination album and URL slug for version keywords", () => {
+    const dest = {
+      title: "Kibun Jou Jou",
+      artists: ["Harusaruhi"],
+      duration_ms: 200_000,
+      album: "Kibun Jou Jou (Cover)",
+      url: "https://music.apple.com/us/album/kibun-jou-jou-cover/1709945211?i=1709945229",
+    };
+    expect(destinationVersionText(dest).toLowerCase()).toContain("cover");
+    expect(versionKeywordsConflict("Kibun Jou Jou", destinationVersionText(dest))).toBe(true);
+    expect(
+      destinationMatchesRecording(
+        { title: "Kibun Jou Jou", artists: ["mihimaru GT"], duration_ms: 200_000 },
+        dest,
+      ),
     ).toBe(false);
   });
 

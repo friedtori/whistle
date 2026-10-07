@@ -134,12 +134,7 @@ async function itunesLookupByIsrc(http: HttpJson, isrc: string): Promise<TrackHi
   const lookup = await http<{ results?: ItunesTrack[] }>(
     `https://itunes.apple.com/lookup?isrc=${encodeURIComponent(isrc)}&entity=song`,
   );
-  const hit = fromItunes(lookup.json?.results?.find((r) => r.trackId) ?? {});
-  if (hit) return hit;
-  const search = await http<{ results?: ItunesTrack[] }>(
-    `https://itunes.apple.com/search?term=${encodeURIComponent(isrc)}&entity=song&limit=5`,
-  );
-  return fromItunes(search.json?.results?.[0] ?? {});
+  return fromItunes(lookup.json?.results?.find((r) => r.trackId) ?? {});
 }
 
 async function itunesSearch(http: HttpJson, term: string): Promise<TrackHit[]> {

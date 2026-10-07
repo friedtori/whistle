@@ -53,6 +53,34 @@ describe("Apple catalog + PEM", () => {
     expect(urls.some((url) => url.includes("itunes.apple.com"))).toBe(false);
   });
 
+  it("does not fall back to iTunes search?term=ISRC when lookup misses", async () => {
+    const urls: string[] = [];
+    const provider = createAppleProvider({ appleStorefront: "us" } as Config, async <T>(url: string) => {
+      urls.push(url);
+      if (url.includes("lookup?isrc=")) {
+        return ok({ results: [] }) as JsonResponse<T>;
+      }
+      if (url.includes("search?term=")) {
+        return ok({
+          results: [
+            {
+              trackId: 1,
+              trackName: "Unrelated First Result",
+              artistName: "Someone Else",
+              trackTimeMillis: 180000,
+            },
+          ],
+        }) as JsonResponse<T>;
+      }
+      return ok({ results: [] }) as JsonResponse<T>;
+    });
+
+    const found = await provider.getByIsrc("USUG11904206");
+    expect(found).toBeNull();
+    expect(urls.some((url) => url.includes("lookup?isrc="))).toBe(true);
+    expect(urls.some((url) => /search\?term=/.test(url))).toBe(false);
+  });
+
   it("surfaces catalog 401 as credentials_missing", async () => {
     const provider = createAppleProvider(catalogConfig, async <T>() => {
       return { ok: false, status: 401, json: null, text: "unauthorized" } as JsonResponse<T>;
