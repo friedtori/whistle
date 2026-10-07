@@ -49,6 +49,8 @@ export function canonicalUrl(kind: IdentifierKind, value: string): string {
       return `https://musicbrainz.org/recording/${value}`;
     case "isrc":
       return `https://isrc.soundexchange.com/?isrc=${value}`;
+    case "query":
+      throw new Error("query identifiers have no canonical URL");
   }
 }
 
@@ -57,6 +59,10 @@ export function parseInput(input: {
   platform?: string;
   id?: string;
   url?: string;
+  artist?: string;
+  title?: string;
+  duration_ms?: number | string;
+  duration?: number | string;
 }): ParsedInput {
   if (input.isrc) {
     const isrc = normalizeIsrc(input.isrc);
@@ -80,10 +86,56 @@ export function parseInput(input: {
       if (!isrc) throw badRequest(`Invalid ISRC: ${value}`);
       return { kind: "isrc", value: isrc };
     }
+    if (kind === "query") throw badRequest("Unsupported platform: query");
     return { kind, value, url: canonicalUrl(kind, value) };
   }
 
-  throw badRequest("Provide isrc, url, or platform+id");
+  const artist = input.artist?.trim();
+  const title = input.title?.trim();
+  if (artist && title) {
+    const duration_ms = parseDurationMs(input);
+    if (duration_ms == null) {
+      throw badRequest("duration_ms is required for artist+title resolve");
+    }
+    return {
+      kind: "query",
+      value: queryCacheKey(artist, title, duration_ms),
+      artist,
+      title,
+      duration_ms,
+    };
+  }
+
+  throw badRequest("Provide isrc, url, platform+id, or artist+title");
+}
+
+export function parseDurationMs(input: {
+  duration_ms?: number | string;
+  duration?: number | string;
+}): number | null {
+  if (hasValue(input.duration_ms)) {
+    const n = Number(input.duration_ms);
+    if (!Number.isFinite(n) || n <= 0) throw badRequest("duration_ms must be a positive number");
+    return Math.round(n);
+  }
+  if (hasValue(input.duration)) {
+    const n = Number(input.duration);
+    if (!Number.isFinite(n) || n <= 0) throw badRequest("duration must be a positive number of seconds");
+    return Math.round(n * 1000);
+  }
+  return null;
+}
+
+export function queryCacheKey(artist: string, title: string, durationMs: number): string {
+  return `${normalizeQueryPart(artist)}|${normalizeQueryPart(title)}|${durationMs}`;
+}
+
+function normalizeQueryPart(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hasValue(value: number | string | undefined): value is number | string {
+  return value !== undefined && value !== "";
 }
 
 export function parseUrl(raw: string): ParsedInput | null {
@@ -164,7 +216,7 @@ export function parseUrl(raw: string): ParsedInput | null {
 
 export function parsePlatformFromUrl(raw: string): { platform: Platform; id: string; url: string } | null {
   const parsed = parseUrl(raw);
-  if (!parsed || parsed.kind === "isrc") return null;
+  if (!parsed || parsed.kind === "isrc" || parsed.kind === "query") return null;
   return {
     platform: parsed.kind,
     id: parsed.value,

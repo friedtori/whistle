@@ -7,7 +7,13 @@ const VERSION_FAMILIES: Array<{ family: string; pattern: RegExp }> = [
   { family: "remix", pattern: /\b(?:re-?mix(?:ed)?|rmx)\b/i },
   { family: "edit", pattern: /\b(?:re-?edits?|edits?)\b/i },
   { family: "remaster", pattern: /\bre-?masters?(?:ed)?\b/i },
+  { family: "acoustic", pattern: /\bacoustic\b/i },
+  { family: "instrumental", pattern: /\binstrumental\b/i },
+  { family: "karaoke", pattern: /\bkaraoke\b/i },
+  { family: "cover", pattern: /\bcover\b/i },
 ];
+
+const ARTIST_STOP_WORDS = new Set(["the", "a", "an", "and", "of", "feat", "ft", "featuring"]);
 
 export function versionFamilies(title: string): Set<string> {
   const found = new Set<string>();
@@ -58,6 +64,32 @@ export function titleSimilarity(a: string, b: string): number {
   for (const t of ta) if (tb.has(t)) inter += 1;
   const union = new Set([...ta, ...tb]).size;
   return union === 0 ? 0 : inter / union;
+}
+
+export function artistTokens(raw: string): Set<string> {
+  return new Set(
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((token) => token && !ARTIST_STOP_WORDS.has(token)),
+  );
+}
+
+export function artistSimilarity(queryArtist: string, candidateArtists: string[] | string): number {
+  const query = artistTokens(queryArtist);
+  const candidate = artistTokens(
+    Array.isArray(candidateArtists) ? candidateArtists.join(" ") : candidateArtists,
+  );
+  if (query.size === 0 || candidate.size === 0) return 0;
+  let inter = 0;
+  for (const token of query) if (candidate.has(token)) inter += 1;
+  const union = new Set([...query, ...candidate]).size;
+  return union === 0 ? 0 : inter / union;
+}
+
+export function artistOverlaps(queryArtist: string, candidateArtists: string[] | string): boolean {
+  return artistSimilarity(queryArtist, candidateArtists) > 0;
 }
 
 export interface FuzzyDecision {

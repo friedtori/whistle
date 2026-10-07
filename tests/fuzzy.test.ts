@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateFuzzy, versionKeywordsConflict } from "../src/fuzzy.ts";
+import { artistOverlaps, artistSimilarity, evaluateFuzzy, versionKeywordsConflict } from "../src/fuzzy.ts";
 
 describe("fuzzy acceptance gates", () => {
   const studio = { title: "Blinding Lights", duration_ms: 200_040 };
@@ -49,5 +49,21 @@ describe("fuzzy acceptance gates", () => {
     expect(evaluateFuzzy({ title: "Song", duration_ms: null }, { title: "Song", duration_ms: 1000 }).accepted).toBe(
       false,
     );
+  });
+
+  it("rejects remaster vs original even when duration matches", () => {
+    expect(
+      evaluateFuzzy(
+        { title: "Blinding Lights", duration_ms: 200_040 },
+        { title: "Blinding Lights (Remastered)", duration_ms: 200_040 },
+      ).accepted,
+    ).toBe(false);
+  });
+
+  it("requires artist token overlap for bootstrap candidates", () => {
+    expect(artistOverlaps("The Weeknd", ["The Weeknd"])).toBe(true);
+    expect(artistOverlaps("The Weeknd", ["Weeknd"])).toBe(true);
+    expect(artistOverlaps("The Weeknd", ["Taylor Swift"])).toBe(false);
+    expect(artistSimilarity("The Weeknd", ["Taylor Swift"])).toBe(0);
   });
 });

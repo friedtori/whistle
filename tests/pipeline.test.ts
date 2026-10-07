@@ -143,6 +143,73 @@ describe("resolution pipeline", () => {
     expect(isrcCalls).toBe(1);
   });
 
+  it("resolves by artist+title via Deezer search and marks the source link fuzzy", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer")],
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
+      }),
+      apple: stubProvider("apple", {
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("apple") },
+      }),
+    });
+
+    const result = await resolveTrack(
+      { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+      { db, providers },
+    );
+
+    expect(result.cached).toBe(false);
+    expect(result.recording.title).toBe("Blinding Lights");
+    expect(result.identifiers.some((id) => id.kind === "query")).toBe(true);
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: BLINDING_LIGHTS.urls.deezer,
+    });
+    expect(result.links.find((l) => l.platform === "apple")?.method).toBe("isrc");
+
+    const again = await resolveTrack(
+      { artist: "the weeknd", title: "blinding lights", duration_ms: 200_040 },
+      { db, providers },
+    );
+    expect(again.cached).toBe(true);
+    expect(again.recording.id).toBe(result.recording.id);
+  });
+
+  it("rejects artist+title bootstrap when only a remaster or wrong artist is found", async () => {
+    const db = memoryStore();
+    const remasterProviders = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [
+          hit("deezer", {
+            title: "Blinding Lights (Remastered)",
+            duration_ms: BLINDING_LIGHTS.duration_ms,
+          }),
+        ],
+      }),
+    });
+    await expect(
+      resolveTrack(
+        { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+        { db, providers: remasterProviders },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+
+    const wrongArtist = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer", { artists: ["Someone Else"] })],
+      }),
+    });
+    await expect(
+      resolveTrack(
+        { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+        { db, providers: wrongArtist },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
   it("resolves Spotify last via title search and never uses it to seed earlier platforms", async () => {
     const order: string[] = [];
     const db = memoryStore();

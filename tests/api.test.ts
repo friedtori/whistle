@@ -89,6 +89,93 @@ describe("HTTP API", () => {
     expect(tidal.body.recording.id).toBe(deezer.body.recording.id);
   });
 
+  it("GET /v1/resolve?artist=&title= returns links when Deezer search matches", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer")],
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
+      }),
+      apple: stubProvider("apple", {
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("apple") },
+      }),
+    });
+    const app = createApp({ db, providers });
+
+    const res = await request(app).get("/v1/resolve").query({
+      artist: "The Weeknd",
+      title: "Blinding Lights",
+      duration_ms: 200_040,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.recording.title).toBe("Blinding Lights");
+    expect(res.body.cached).toBe(false);
+    const deezer = res.body.links.find((link: { platform: string }) => link.platform === "deezer");
+    expect(deezer).toMatchObject({ unmatched: false, method: "fuzzy" });
+    expect(res.body.links.find((link: { platform: string }) => link.platform === "apple")).toMatchObject({
+      unmatched: false,
+      method: "isrc",
+    });
+
+    const viaSeconds = await request(app).get("/v1/resolve").query({
+      artist: "The Weeknd",
+      title: "Blinding Lights",
+      duration: 200.04,
+    });
+    expect(viaSeconds.status).toBe(200);
+    expect(viaSeconds.body.cached).toBe(true);
+    expect(viaSeconds.body.recording.id).toBe(res.body.recording.id);
+  });
+
+  it("GET /v1/resolve artist+title requires duration_ms and 404s when no fuzzy match", async () => {
+    const { app } = testApp();
+    const missing = await request(app).get("/v1/resolve").query({
+      artist: "The Weeknd",
+      title: "Blinding Lights",
+    });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error.code).toBe("bad_request");
+    expect(missing.body.error.message).toMatch(/duration_ms is required/);
+
+    const none = await request(app).get("/v1/resolve").query({
+      artist: "The Weeknd",
+      title: "Blinding Lights",
+      duration_ms: 200_040,
+    });
+    expect(none.status).toBe(404);
+    expect(none.body.error.code).toBe("not_found");
+  });
+
+  it("POST /v1/resolve/batch accepts artist+title items alongside isrc", async () => {
+    const db = memoryStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [hit("deezer")],
+        byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
+      }),
+    });
+    const app = createApp({ db, providers });
+
+    const res = await request(app)
+      .post("/v1/resolve/batch")
+      .send({
+        inputs: [
+          { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
+          { isrc: BLINDING_LIGHTS.isrc },
+          { artist: "The Weeknd", title: "Blinding Lights" },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(3);
+    expect(res.body.results[0].ok).toBe(true);
+    expect(res.body.results[0].links.find((link: { platform: string }) => link.platform === "deezer")).toMatchObject({
+      method: "fuzzy",
+    });
+    expect(res.body.results[1].ok).toBe(true);
+    expect(res.body.results[2].ok).toBe(false);
+    expect(res.body.results[2].error.code).toBe("bad_request");
+  });
+
   it("POST /v1/resolve/batch accepts up to 100 inputs and rejects 101", async () => {
     const { app } = testApp();
     const ok = await request(app)
