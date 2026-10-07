@@ -88,6 +88,18 @@ describe("parseUrl / parseInput", () => {
     expect(queryCacheKey("The  Weeknd", "Blinding Lights", 200_040)).toBe(
       queryCacheKey("the weeknd", "blinding lights", 200_040),
     );
+    expect(
+      parseInput({
+        artist: "Alanis Morissette",
+        title: "Ironic",
+        album: "Jagged Little Pill",
+        duration_ms: 230_000,
+      }),
+    ).toMatchObject({
+      kind: "query",
+      album: "Jagged Little Pill",
+      value: queryCacheKey("Alanis Morissette", "Ironic", 230_000, "Jagged Little Pill"),
+    });
   });
 
   it("accepts duration in seconds and requires duration for artist+title", () => {

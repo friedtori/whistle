@@ -17,6 +17,7 @@ curl 'http://127.0.0.1:3000/v1/resolve?isrc=USUG11904206'
 curl 'http://127.0.0.1:3000/v1/resolve?url=https://www.deezer.com/track/916424'
 curl 'http://127.0.0.1:3000/v1/resolve?platform=spotify&id=0VjIjW4GlUZAMYd2vXMi3b'
 curl 'http://127.0.0.1:3000/v1/resolve?artist=The%20Weeknd&title=Blinding%20Lights&duration_ms=200040'
+curl 'http://127.0.0.1:3000/v1/resolve?artist=Alanis%20Morissette&title=Ironic&album=Jagged%20Little%20Pill&duration_ms=230000'
 ```
 
 ```bash
@@ -50,8 +51,8 @@ All resolve responses include `recording`, `identifiers`, `links[]` (`confidence
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/resolve?isrc=` or `?platform=&id=` or `?url=` or `?artist=&title=&duration_ms=` | Resolve one input |
-| `POST` | `/v1/resolve/batch` | Up to 100 inputs: `{ "inputs": [ { "isrc" }, { "platform", "id" }, { "url" }, { "artist", "title", "duration_ms" } ] }` |
+| `GET` | `/v1/resolve?isrc=` or `?platform=&id=` or `?url=` or `?artist=&title=&duration_ms=` (`album` optional) | Resolve one input |
+| `POST` | `/v1/resolve/batch` | Up to 100 inputs: `{ "inputs": [ { "isrc" }, { "platform", "id" }, { "url" }, { "artist", "title", "duration_ms", "album"? } ] }` |
 | `GET` | `/v1/recordings/{id}` | Cached recording + links |
 | `POST` | `/v1/corrections` | Flag a link: `{ "link_id", "reason": "wrong" }` or `{ "recording_id", "platform", "reason": "missing" }` |
 | `GET` | `/health` | Liveness |
@@ -60,13 +61,13 @@ v1 platforms: `apple`, `deezer`, `tidal`, `musicbrainz`, `spotify`, `ytm`.
 
 ### Pipeline
 
-1. Cache (exact input identifier, including a normalized `query` key for artist+title+duration)
+1. Cache (exact input identifier, including a normalized `query` key for artist+title+duration, plus album when sent)
 2. ISRC lookups (Deezer, Apple, Tidal, MusicBrainz) — or, for artist+title, a Deezer/Apple/Tidal search bootstrap that must pass the fuzzy gates
 3. MusicBrainz URL relations
 4. Fuzzy title/artist search — accepted only when duration is within 2 seconds **and** version keywords (`live`, `remix`, `edit`, `remaster`, plus `acoustic` / `instrumental` / `karaoke` / `cover`) do not conflict
 5. Spotify last (ISRC, then search). Never used as the sole authority for other platforms
 
-Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, share version keywords, and have case-insensitive artist token overlap. The bootstrap platform link is stored with `method: "fuzzy"`. If search finds no accepted hit, the API returns `404 not_found`.
+Artist+title resolve is for listening-history rows that have no ISRC. **`duration_ms` is required** (or `duration` in seconds on GET). Candidates must be within 2 seconds, share version keywords, and have case-insensitive artist token overlap. Optional `album` is a soft preference: matching album titles win, and obvious compilations (`greatest hits`, `the collection`, …) are downranked unless they are the only match or the query album itself looks like a compilation. The bootstrap platform link is stored with `method: "fuzzy"`. If search finds no accepted hit, the API returns `404 not_found`.
 
 Repeat lookups of the same input are served from the SQLite cache.
 

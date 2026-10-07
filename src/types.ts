@@ -68,6 +68,7 @@ export interface ParsedInput {
   url?: string;
   artist?: string;
   title?: string;
+  album?: string;
   duration_ms?: number;
 }
 
@@ -78,6 +79,7 @@ export interface ResolveQuery {
   url?: string;
   artist?: string;
   title?: string;
+  album?: string;
   duration_ms?: number | string;
   duration?: number | string;
 }
@@ -89,6 +91,7 @@ export interface TrackHit {
   title: string;
   artists: string[];
   duration_ms: number | null;
+  album?: string | null;
   isrc?: string | null;
   mbid?: string | null;
 }

@@ -178,6 +178,50 @@ describe("resolution pipeline", () => {
     expect(again.recording.id).toBe(result.recording.id);
   });
 
+  it("bootstraps artist+title+album onto the studio album, not a compilation", async () => {
+    const db = memoryStore();
+    const studio = hit("deezer", {
+      id: "111",
+      title: "Ironic",
+      artists: ["Alanis Morissette"],
+      album: "Jagged Little Pill",
+      duration_ms: 230_000,
+      isrc: "USMC19500123",
+      url: "https://www.deezer.com/track/111",
+    });
+    const compilation = hit("deezer", {
+      id: "222",
+      title: "Ironic",
+      artists: ["Alanis Morissette"],
+      album: "The Collection",
+      duration_ms: 230_000,
+      isrc: "OTHER00000000",
+      url: "https://www.deezer.com/track/222",
+    });
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", {
+        searchHits: [compilation, studio],
+        byIsrc: { [studio.isrc!]: studio },
+      }),
+    });
+
+    const result = await resolveTrack(
+      {
+        artist: "Alanis Morissette",
+        title: "Ironic",
+        album: "Jagged Little Pill",
+        duration_ms: 230_000,
+      },
+      { db, providers },
+    );
+
+    expect(result.links.find((l) => l.platform === "deezer")).toMatchObject({
+      unmatched: false,
+      method: "fuzzy",
+      url: studio.url,
+    });
+  });
+
   it("rejects artist+title bootstrap when only a remaster or wrong artist is found", async () => {
     const db = memoryStore();
     const remasterProviders = mockProviders({

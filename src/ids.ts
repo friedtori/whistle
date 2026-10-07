@@ -61,6 +61,7 @@ export function parseInput(input: {
   url?: string;
   artist?: string;
   title?: string;
+  album?: string;
   duration_ms?: number | string;
   duration?: number | string;
 }): ParsedInput {
@@ -97,11 +98,13 @@ export function parseInput(input: {
     if (duration_ms == null) {
       throw badRequest("duration_ms is required for artist+title resolve");
     }
+    const album = input.album?.trim() || undefined;
     return {
       kind: "query",
-      value: queryCacheKey(artist, title, duration_ms),
+      value: queryCacheKey(artist, title, duration_ms, album),
       artist,
       title,
+      album,
       duration_ms,
     };
   }
@@ -126,8 +129,16 @@ export function parseDurationMs(input: {
   return null;
 }
 
-export function queryCacheKey(artist: string, title: string, durationMs: number): string {
-  return `${normalizeQueryPart(artist)}|${normalizeQueryPart(title)}|${durationMs}`;
+export function queryCacheKey(
+  artist: string,
+  title: string,
+  durationMs: number,
+  album?: string | null,
+): string {
+  const parts = [normalizeQueryPart(artist), normalizeQueryPart(title)];
+  if (album?.trim()) parts.push(normalizeQueryPart(album));
+  parts.push(String(durationMs));
+  return parts.join("|");
 }
 
 function normalizeQueryPart(value: string): string {

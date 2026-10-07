@@ -14,6 +14,7 @@ const batchItemSchema = z
     url: z.string().optional(),
     artist: z.string().optional(),
     title: z.string().optional(),
+    album: z.string().optional(),
     duration_ms: z.number().optional(),
     duration: z.number().optional(),
   })
@@ -181,6 +182,7 @@ function resolveQueryFromRequest(req: Request): ResolveQuery {
     url: typeof q.url === "string" ? q.url : undefined,
     artist: typeof q.artist === "string" ? q.artist : undefined,
     title: typeof q.title === "string" ? q.title : undefined,
+    album: typeof q.album === "string" ? q.album : undefined,
     duration_ms: typeof q.duration_ms === "string" ? q.duration_ms : undefined,
     duration: typeof q.duration === "string" ? q.duration : undefined,
   };

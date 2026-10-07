@@ -183,15 +183,16 @@ function methodForSource(kind: IdentifierKind, source: TrackHit): MatchMethod {
 }
 
 async function bootstrapFromSearch(
-  parsed: { artist?: string; title?: string; duration_ms?: number },
+  parsed: { artist?: string; title?: string; album?: string; duration_ms?: number },
   providers: ProviderMap,
 ): Promise<TrackHit | null> {
   const artist = parsed.artist?.trim() ?? "";
   const title = parsed.title?.trim() ?? "";
+  const album = parsed.album?.trim() || undefined;
   const duration_ms = parsed.duration_ms ?? null;
   if (!artist || !title || duration_ms == null) return null;
 
-  const probe = { title, duration_ms };
+  const probe = { title, duration_ms, album };
   for (const platform of SEARCH_BOOTSTRAP) {
     const provider = providers[platform];
     if (!provider.enabled) continue;
@@ -309,6 +310,7 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
   const probe = {
     title: recording.title || source.title,
     duration_ms: recording.duration_ms ?? source.duration_ms,
+    album: source.album,
   };
   for (const platform of FUZZY_STAGE) {
     if (hasMatch(deps.db, recordingId, platform)) continue;
@@ -354,7 +356,11 @@ async function runSpotifyLast(
       duration_ms: recording.duration_ms ?? source.duration_ms,
     });
     const picked = pickFuzzyMatch(
-      { title: recording.title || source.title, duration_ms: recording.duration_ms ?? source.duration_ms },
+      {
+        title: recording.title || source.title,
+        duration_ms: recording.duration_ms ?? source.duration_ms,
+        album: source.album,
+      },
       hits,
     );
     if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);

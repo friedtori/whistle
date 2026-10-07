@@ -80,6 +80,7 @@ interface SpotifyTrack {
   external_ids?: { isrc?: string };
   external_urls?: { spotify?: string };
   artists?: Array<{ name?: string }>;
+  album?: { name?: string };
 }
 
 function fromTrack(raw: SpotifyTrack | null): TrackHit | null {
@@ -91,6 +92,7 @@ function fromTrack(raw: SpotifyTrack | null): TrackHit | null {
     title: raw.name,
     artists: (raw.artists ?? []).map((a) => a.name).filter((n): n is string => Boolean(n)),
     duration_ms: asNumber(raw.duration_ms),
+    album: asString(raw.album?.name),
     isrc: asString(raw.external_ids?.isrc),
   };
 }

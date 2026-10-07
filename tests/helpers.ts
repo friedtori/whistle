@@ -33,6 +33,7 @@ export function hit(platform: Platform, overrides: Partial<TrackHit> = {}): Trac
     title: overrides.title ?? BLINDING_LIGHTS.title,
     artists: overrides.artists ?? BLINDING_LIGHTS.artists,
     duration_ms: overrides.duration_ms ?? BLINDING_LIGHTS.duration_ms,
+    album: overrides.album,
     isrc: overrides.isrc === undefined ? BLINDING_LIGHTS.isrc : overrides.isrc,
     mbid: overrides.mbid ?? (platform === "musicbrainz" ? BLINDING_LIGHTS.ids.musicbrainz : null),
   };

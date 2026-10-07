@@ -92,6 +92,24 @@ export function artistOverlaps(queryArtist: string, candidateArtists: string[] |
   return artistSimilarity(queryArtist, candidateArtists) > 0;
 }
 
+const ALBUM_MATCH_THRESHOLD = 0.85;
+
+const COMPILATION_RE =
+  /\b(greatest hits|best of|the collection|the very best|the hits|hits collection|compilation|anthology|various artists|now that s what i call|singles(?: box| collection)?|ultimate collection)\b/;
+
+export function normalizeAlbum(album: string): string {
+  return normalizeTitle(album);
+}
+
+export function albumSimilarity(a: string, b: string): number {
+  return titleSimilarity(a, b);
+}
+
+export function isCompilationAlbum(album: string | null | undefined): boolean {
+  if (!album?.trim()) return false;
+  return COMPILATION_RE.test(normalizeAlbum(album));
+}
+
 export interface FuzzyDecision {
   accepted: boolean;
   confidence: number;
@@ -115,16 +133,48 @@ export function evaluateFuzzy(
 }
 
 export function pickFuzzyMatch(
-  source: { title: string; duration_ms: number | null },
+  source: { title: string; duration_ms: number | null; album?: string | null },
   candidates: TrackHit[],
 ): { hit: TrackHit; confidence: number } | null {
-  let best: { hit: TrackHit; confidence: number } | null = null;
+  const queryAlbum = source.album?.trim() ?? "";
+  const queryLooksCompilation = isCompilationAlbum(queryAlbum);
+
+  const accepted: Array<{
+    hit: TrackHit;
+    confidence: number;
+    albumSim: number;
+    compilation: boolean;
+  }> = [];
   for (const hit of candidates) {
     const decision = evaluateFuzzy(source, hit);
     if (!decision.accepted) continue;
-    if (!best || decision.confidence > best.confidence) {
-      best = { hit, confidence: decision.confidence };
+    accepted.push({
+      hit,
+      confidence: decision.confidence,
+      albumSim: queryAlbum && hit.album ? albumSimilarity(queryAlbum, hit.album) : 0,
+      compilation: isCompilationAlbum(hit.album),
+    });
+  }
+  if (accepted.length === 0) return null;
+
+  let pool = accepted;
+  if (queryAlbum) {
+    const albumMatches = accepted.filter((item) => item.albumSim >= ALBUM_MATCH_THRESHOLD);
+    if (albumMatches.length > 0) {
+      pool = albumMatches;
+    } else if (!queryLooksCompilation) {
+      const nonCompilations = accepted.filter((item) => !item.compilation);
+      if (nonCompilations.length > 0) pool = nonCompilations;
     }
   }
-  return best;
+
+  let best = pool[0];
+  for (const item of pool) {
+    if (item.albumSim > best.albumSim) {
+      best = item;
+    } else if (item.albumSim === best.albumSim && item.confidence > best.confidence) {
+      best = item;
+    }
+  }
+  return { hit: best.hit, confidence: best.confidence };
 }
