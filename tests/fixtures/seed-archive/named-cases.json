@@ -1,0 +1,194 @@
+{
+  "archive_provenance": {
+    "likely_revision": "ecf605b72494ec1e0e60d13173ebd42fbb0d567f",
+    "likely_revision_note": "Export has isrc_from_fuzzy (post PR #4) but no recording_confidence and bootstrap fuzzy links collapsed to 0.65 (pre PR #5). No deployed commit was stored in the archive.",
+    "fuzzy_totals": { "ok": 870, "total": 900, "links_note": "3743 matched links; coverage not accuracy" },
+    "isrc_totals": { "ok": 374, "total": 374 }
+  },
+  "fuzzy_identity_conflicts": [
+    {
+      "input_key": "this is lorelei\toh no now my\toh no now my\t188000",
+      "archive_row": 9,
+      "artist": "This Is Lorelei",
+      "title": "Oh No Now My",
+      "album": "Oh No Now My",
+      "duration_ms": 188000,
+      "archive_returned_title": "Billy Came Back",
+      "archive_recording_id": "9v6e4hxl4hz3",
+      "collides_with": {
+        "archive_row": 83,
+        "input_key": "this is lorelei\tbilly came back\toh no now my\t189000",
+        "title": "Billy Came Back",
+        "duration_ms": 189000,
+        "recording_id": "7ozo0lcvlir5",
+        "shared_urls": [
+          "https://music.apple.com/us/song/6774172446",
+          "https://tidal.com/browse/track/554024753",
+          "https://open.spotify.com/track/3ugz7wYrIltNprCU6SsVJR"
+        ]
+      }
+    },
+    {
+      "input_key": "empress of\tsyw (feat. cecile believe)\tsyw (feat. cecile believe)\t167000",
+      "archive_row": 24,
+      "artist": "Empress Of",
+      "title": "SYW (feat. Cecile Believe)",
+      "album": "SYW (feat. Cecile Believe)",
+      "duration_ms": 167000,
+      "archive_returned_title": "Wild Storm",
+      "archive_recording_id": "pcgb6fx0kall",
+      "shared_recording_with": ["fuzzy:297", "isrc:134"]
+    },
+    {
+      "input_key": "bloc party\tpigwig\tpigwig\t210000",
+      "archive_row": 290,
+      "artist": "Bloc Party",
+      "title": "Pigwig",
+      "album": "Pigwig",
+      "duration_ms": 210000,
+      "archive_returned_title": "Now We Can't Be Friends",
+      "archive_recording_id": "q0hb91c9ise7",
+      "collides_with": {
+        "archive_row": 351,
+        "title": "Now We Can't Be Friends",
+        "duration_ms": 210000,
+        "recording_id": "k6rw9pagn7de",
+        "shared_urls": [
+          "https://music.apple.com/us/album/now-we-cant-be-friends/1895408368?i=6763631016",
+          "https://tidal.com/browse/track/558620915"
+        ]
+      }
+    },
+    {
+      "input_key": "empress of\thandson\thandson\t169000",
+      "archive_row": 297,
+      "artist": "Empress Of",
+      "title": "HandsOn",
+      "album": "HandsOn",
+      "duration_ms": 169000,
+      "archive_returned_title": "Wild Storm",
+      "archive_recording_id": "pcgb6fx0kall"
+    },
+    {
+      "input_key": "ricardo villalobos\tdexter\tdexter\t549000",
+      "archive_row": 819,
+      "artist": "Ricardo Villalobos",
+      "title": "Dexter",
+      "album": "Dexter",
+      "duration_ms": 549000,
+      "archive_returned_title": "Nord",
+      "archive_recording_id": "czgbcqukfa7o"
+    }
+  ],
+  "destination_apple_conflicts": [
+    {
+      "archive_row": 124,
+      "isrc": "JPPO00605880",
+      "source_artist": "Mihimaru Gt",
+      "source_title": "気分上々↑↑",
+      "archive_recording_title": "Kibun Jou Jou",
+      "apple_url": "https://music.apple.com/us/album/kibun-jou-jou-cover/1709945211?i=1709945229&uo=4",
+      "apple_id": "1709945229",
+      "apple_page_title": "Kibun Jou Jou (Cover)",
+      "apple_page_artist": "Harusaruhi",
+      "archive_method": "fuzzy",
+      "archive_confidence": 0.8
+    },
+    {
+      "archive_row": 327,
+      "isrc": "USUM71405403",
+      "source_artist": "Ariana Grande",
+      "source_title": "Problem",
+      "archive_recording_title": "Problem",
+      "apple_url": "https://music.apple.com/us/album/problem-instrumental/1764322879?i=1764322886&uo=4",
+      "apple_id": "1764322886",
+      "apple_page_title": "Problem (Instrumental)",
+      "archive_method": "fuzzy",
+      "archive_confidence": 0.8
+    },
+    {
+      "archive_row": 341,
+      "isrc": "USUM71809768",
+      "source_artist": "Olivia O'Brien",
+      "source_title": "UDK",
+      "archive_recording_title": "UDK",
+      "apple_url": "https://music.apple.com/us/album/udk-acoustic/1428922915?i=1428923801&uo=4",
+      "apple_id": "1428923801",
+      "apple_page_title": "UDK (Acoustic)",
+      "archive_method": "fuzzy",
+      "archive_confidence": 0.8
+    },
+    {
+      "archive_row": 288,
+      "isrc": "USSM12402705",
+      "source_artist": "Beyoncé",
+      "source_title": "BLACKBIIRD",
+      "archive_recording_title": "BLACKBIIRD",
+      "apple_url": "https://music.apple.com/us/album/blackbiird-karaoke-version-originally-performed-by/1742094069?i=1742094073&uo=4",
+      "apple_id": "1742094073",
+      "apple_page_note": "URL names karaoke",
+      "archive_method": "fuzzy",
+      "archive_confidence": 0.8
+    },
+    {
+      "archive_row": 342,
+      "isrc": "USUM71819361",
+      "source_artist": "Ariana Grande",
+      "source_title": "thank u, next",
+      "archive_recording_title": "thank u, next",
+      "apple_url": "https://music.apple.com/us/album/thank-u-next-instrumental/1453077778?i=1453077791&uo=4",
+      "apple_id": "1453077791",
+      "apple_page_note": "URL names instrumental",
+      "archive_method": "fuzzy",
+      "archive_confidence": 0.7382
+    }
+  ],
+  "version_review": [
+    {
+      "archive_row": 421,
+      "input_key": "shygirl\tthicc\tthicc (fedde le grand remix)\t223000",
+      "artist": "Shygirl",
+      "title": "thicc",
+      "album": "thicc (Fedde Le Grand remix)",
+      "duration_ms": 223000,
+      "archive_returned_title": "thicc (acapella)",
+      "note": "Query title is bare thicc; remix lives on the album field. EP has multiple versions. Album name alone is insufficient to pick a remix, but acapella must not auto-match."
+    },
+    {
+      "archive_row": 592,
+      "input_key": "zara larsson\tmidnight sun\tmidnight sun\t190000",
+      "artist": "Zara Larsson",
+      "title": "Midnight Sun",
+      "album": "Midnight Sun",
+      "duration_ms": 190000,
+      "archive_returned_title": "Midnight Sun (Super Loud)",
+      "note": "Version-review: Super Loud is not a known version family. Prefer a bare Midnight Sun when both exist; do not hard-404 if Super Loud is the only duration-valid hit."
+    }
+  ],
+  "wild_storm_seed": {
+    "isrc": "QM24S2602823",
+    "artist": "Empress Of",
+    "title": "Wild Storm",
+    "archive_isrc_row": 134,
+    "archive_recording_id": "pcgb6fx0kall"
+  },
+  "positive_controls": [
+    {
+      "archive_row": 71,
+      "artist": "Sneaker Pimps",
+      "title": "Spin Spin Sugar",
+      "album": "Becoming Remixed",
+      "duration_ms": 543000,
+      "archive_returned_title": "Spin Spin Sugar (Armand's Dark Garage Mix)"
+    },
+    {
+      "archive_row": 206,
+      "artist": "AL-90",
+      "title": "Завуалированный Сигнал",
+      "album": "Код-915913",
+      "duration_ms": 306000,
+      "archive_returned_title": "Завуалированный Сигнал",
+      "note": "Cyrillic title must remain accepted after Unicode-preserving normalize. Latin-only normalize would score 0."
+    }
+  ]
+}

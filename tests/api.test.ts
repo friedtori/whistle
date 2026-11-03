@@ -1,17 +1,18 @@
-import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { createApp } from "../src/app.ts";
+import { DEFAULT_BATCH_MAX_INPUTS } from "../src/config.ts";
 import {
   BLINDING_LIGHTS,
+  client,
   hit,
-  memoryStore,
+  freshStore,
   mockProviders,
   stubMb,
   stubProvider,
+  testApp,
 } from "./helpers.ts";
 
-function testApp() {
-  const db = memoryStore();
+async function blindingLightsApp() {
+  const db = await freshStore();
   const providers = mockProviders({
     deezer: stubProvider("deezer", {
       byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer") },
@@ -41,13 +42,13 @@ function testApp() {
       ],
     }),
   });
-  return { app: createApp({ db, providers }), db, providers };
+  return { api: client(testApp(db, providers)), db, providers };
 }
 
 describe("HTTP API", () => {
   it("GET /v1/resolve?isrc= returns recording + platform links", async () => {
-    const { app } = testApp();
-    const res = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
+    const { api } = await blindingLightsApp();
+    const res = await api.get("/v1/resolve", { isrc: BLINDING_LIGHTS.isrc });
     expect(res.status).toBe(200);
     expect(res.body.recording.title).toBe("Blinding Lights");
     expect(Array.isArray(res.body.links)).toBe(true);
@@ -56,41 +57,41 @@ describe("HTTP API", () => {
       expect(link).toHaveProperty("method");
     }
     expect(res.body.cached).toBe(false);
+    expect(res.body.recording_confidence).toBe(0.98);
+    expect(res.body.evidence.matching_rule_version).toBeTruthy();
+    expect(typeof res.body.evidence.credentials_skipped).toBe("number");
+    expect(res.body.evidence.recording_reused).toBe(false);
+    expect(res.body.evidence.query_match).toMatchObject({ method: "isrc" });
+    expect(Array.isArray(res.body.evidence.destinations)).toBe(true);
 
-    const again = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
+    const again = await api.get("/v1/resolve", { isrc: BLINDING_LIGHTS.isrc });
     expect(again.status).toBe(200);
     expect(again.body.cached).toBe(true);
     expect(again.body.recording.id).toBe(res.body.recording.id);
+    expect(again.body.evidence.recording_reused).toBe(true);
+    expect(again.body.evidence.reuse_via).toBe("input_cache");
   });
 
   it("resolves Spotify / Apple / Deezer / Tidal ids or URLs to one recording", async () => {
-    const { app } = testApp();
-    const deezer = await request(app)
-      .get("/v1/resolve")
-      .query({ url: "https://www.deezer.com/track/916424" });
+    const { api } = await blindingLightsApp();
+    const deezer = await api.get("/v1/resolve", { url: "https://www.deezer.com/track/916424" });
     expect(deezer.status).toBe(200);
 
-    const apple = await request(app)
-      .get("/v1/resolve")
-      .query({ platform: "apple", id: BLINDING_LIGHTS.ids.apple });
+    const apple = await api.get("/v1/resolve", { platform: "apple", id: BLINDING_LIGHTS.ids.apple });
     expect(apple.status).toBe(200);
     expect(apple.body.recording.id).toBe(deezer.body.recording.id);
 
-    const spotify = await request(app)
-      .get("/v1/resolve")
-      .query({ url: BLINDING_LIGHTS.urls.spotify });
+    const spotify = await api.get("/v1/resolve", { url: BLINDING_LIGHTS.urls.spotify });
     expect(spotify.status).toBe(200);
     expect(spotify.body.recording.id).toBe(deezer.body.recording.id);
 
-    const tidal = await request(app)
-      .get("/v1/resolve")
-      .query({ platform: "tidal", id: BLINDING_LIGHTS.ids.tidal });
+    const tidal = await api.get("/v1/resolve", { platform: "tidal", id: BLINDING_LIGHTS.ids.tidal });
     expect(tidal.status).toBe(200);
     expect(tidal.body.recording.id).toBe(deezer.body.recording.id);
   });
 
   it("GET /v1/resolve?artist=&title= returns links when Deezer search matches", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [hit("deezer")],
@@ -100,9 +101,9 @@ describe("HTTP API", () => {
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("apple") },
       }),
     });
-    const app = createApp({ db, providers });
+    const api = client(testApp(db, providers));
 
-    const res = await request(app).get("/v1/resolve").query({
+    const res = await api.get("/v1/resolve", {
       artist: "The Weeknd",
       title: "Blinding Lights",
       duration_ms: 200_040,
@@ -110,6 +111,7 @@ describe("HTTP API", () => {
     expect(res.status).toBe(200);
     expect(res.body.recording.title).toBe("Blinding Lights");
     expect(res.body.cached).toBe(false);
+    expect(typeof res.body.recording_confidence).toBe("number");
     const deezer = res.body.links.find((link: { platform: string }) => link.platform === "deezer");
     expect(deezer).toMatchObject({ unmatched: false, method: "fuzzy" });
     expect(res.body.links.find((link: { platform: string }) => link.platform === "apple")).toMatchObject({
@@ -117,7 +119,7 @@ describe("HTTP API", () => {
       method: "isrc_from_fuzzy",
     });
 
-    const viaSeconds = await request(app).get("/v1/resolve").query({
+    const viaSeconds = await api.get("/v1/resolve", {
       artist: "The Weeknd",
       title: "Blinding Lights",
       duration: 200.04,
@@ -128,8 +130,8 @@ describe("HTTP API", () => {
   });
 
   it("GET /v1/resolve artist+title requires duration_ms and 404s when no fuzzy match", async () => {
-    const { app } = testApp();
-    const missing = await request(app).get("/v1/resolve").query({
+    const { api } = await blindingLightsApp();
+    const missing = await api.get("/v1/resolve", {
       artist: "The Weeknd",
       title: "Blinding Lights",
     });
@@ -137,7 +139,7 @@ describe("HTTP API", () => {
     expect(missing.body.error.code).toBe("bad_request");
     expect(missing.body.error.message).toMatch(/duration_ms is required/);
 
-    const none = await request(app).get("/v1/resolve").query({
+    const none = await api.get("/v1/resolve", {
       artist: "The Weeknd",
       title: "Blinding Lights",
       duration_ms: 200_040,
@@ -147,18 +149,16 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/resolve/batch accepts artist+title items alongside isrc", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [hit("deezer")],
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
       }),
     });
-    const app = createApp({ db, providers });
+    const api = client(testApp(db, providers));
 
-    const res = await request(app)
-      .post("/v1/resolve/batch")
-      .send({
+    const res = await api.post("/v1/resolve/batch", {
         inputs: [
           { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
           { isrc: BLINDING_LIGHTS.isrc },
@@ -176,38 +176,72 @@ describe("HTTP API", () => {
     expect(res.body.results[2].error.code).toBe("bad_request");
   });
 
-  it("POST /v1/resolve/batch accepts up to 100 inputs and rejects 101", async () => {
-    const { app } = testApp();
-    const ok = await request(app)
-      .post("/v1/resolve/batch")
-      .send({ inputs: [{ isrc: BLINDING_LIGHTS.isrc }, { url: BLINDING_LIGHTS.urls.deezer }] });
+  it(`POST /v1/resolve/batch accepts up to BATCH_MAX_INPUTS (${DEFAULT_BATCH_MAX_INPUTS}) and rejects one more`, async () => {
+    const { api } = await blindingLightsApp();
+    const ok = await api.post("/v1/resolve/batch", {
+      inputs: Array.from({ length: DEFAULT_BATCH_MAX_INPUTS }, () => ({ isrc: BLINDING_LIGHTS.isrc })),
+    });
     expect(ok.status).toBe(200);
-    expect(ok.body.results).toHaveLength(2);
-    expect(ok.body.results[0].ok).toBe(true);
+    expect(ok.body.results).toHaveLength(DEFAULT_BATCH_MAX_INPUTS);
+    expect(ok.body.results.every((item: { ok: boolean }) => item.ok)).toBe(true);
 
-    const tooMany = await request(app)
-      .post("/v1/resolve/batch")
-      .send({ inputs: Array.from({ length: 101 }, () => ({ isrc: BLINDING_LIGHTS.isrc })) });
+    const tooMany = await api.post("/v1/resolve/batch", {
+      inputs: Array.from({ length: DEFAULT_BATCH_MAX_INPUTS + 1 }, () => ({ isrc: BLINDING_LIGHTS.isrc })),
+    });
     expect(tooMany.status).toBe(400);
+    expect(tooMany.body.error.code).toBe("bad_request");
+  });
+
+  it("POST /v1/resolve/batch defers inputs once the request's subrequest budget is spent", async () => {
+    const db = await freshStore();
+    const providers = mockProviders({
+      deezer: stubProvider("deezer", { byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") } }),
+    });
+    // Room for exactly one resolve: cap 4 + 8 reserved D1 calls = 12.
+    const api = client(testApp(db, providers, { subrequestLimit: 12, resolveSubrequestCap: 4 }));
+    const res = await api.post("/v1/resolve/batch", {
+      inputs: [{ isrc: BLINDING_LIGHTS.isrc }, { isrc: "GBAYE0000001" }, { isrc: "GBAYE0000002" }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.results[0].ok).toBe(true);
+    for (const item of res.body.results.slice(1)) {
+      expect(item).toMatchObject({ ok: false, error: { code: "subrequest_budget_exhausted" } });
+    }
+  });
+
+  it("answers at the exact path: no trailing-slash redirect, JSON 404 for unknown routes", async () => {
+    const { api } = await blindingLightsApp();
+    const slash = await api.get("/v1/resolve/", { isrc: BLINDING_LIGHTS.isrc });
+    expect(slash.status).toBe(404);
+    expect(slash.headers.get("location")).toBeNull();
+    expect(slash.body.error.code).toBe("not_found");
+    const health = await api.get("/health");
+    expect(health).toMatchObject({ status: 200, body: { ok: true, service: "whistle" } });
+  });
+
+  it("rejects a malformed JSON batch body with 400", async () => {
+    const { api } = await blindingLightsApp();
+    const res = await api.post("/v1/resolve/batch", "{not json");
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("bad_request");
   });
 
   it("GET /v1/recordings/:id returns the cached recording", async () => {
-    const { app } = testApp();
-    const resolved = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
-    const res = await request(app).get(`/v1/recordings/${resolved.body.recording.id}`);
+    const { api } = await blindingLightsApp();
+    const resolved = await api.get("/v1/resolve", { isrc: BLINDING_LIGHTS.isrc });
+    const res = await api.get(`/v1/recordings/${resolved.body.recording.id}`);
     expect(res.status).toBe(200);
     expect(res.body.recording.id).toBe(resolved.body.recording.id);
     expect(res.body.cached).toBe(true);
-    expect(await request(app).get("/v1/recordings/does-not-exist")).toMatchObject({ status: 404 });
+    expect(res.body.recording_confidence).toBe(resolved.body.recording_confidence);
+    expect(await api.get("/v1/recordings/does-not-exist")).toMatchObject({ status: 404 });
   });
 
   it("POST /v1/corrections accepts a wrong-link flag", async () => {
-    const { app } = testApp();
-    const resolved = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
+    const { api } = await blindingLightsApp();
+    const resolved = await api.get("/v1/resolve", { isrc: BLINDING_LIGHTS.isrc });
     const link = resolved.body.links.find((item: { unmatched: boolean }) => !item.unmatched);
-    const res = await request(app)
-      .post("/v1/corrections")
-      .send({ link_id: link.id, reason: "wrong" });
+    const res = await api.post("/v1/corrections", { link_id: link.id, reason: "wrong" });
     expect(res.status).toBe(201);
     expect(res.body.correction.reason).toBe("wrong");
     expect(res.body.correction.status).toBe("pending");
@@ -215,9 +249,9 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/corrections accepts a missing-link flag", async () => {
-    const { app } = testApp();
-    const resolved = await request(app).get("/v1/resolve").query({ isrc: BLINDING_LIGHTS.isrc });
-    const res = await request(app).post("/v1/corrections").send({
+    const { api } = await blindingLightsApp();
+    const resolved = await api.get("/v1/resolve", { isrc: BLINDING_LIGHTS.isrc });
+    const res = await api.post("/v1/corrections", {
       recording_id: resolved.body.recording.id,
       platform: "ytm",
       reason: "missing",

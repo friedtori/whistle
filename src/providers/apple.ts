@@ -1,11 +1,10 @@
-import jwt from "jsonwebtoken";
+import { SignJWT, importPKCS8 } from "jose";
 import type { Config } from "../config.ts";
 import { hasAppleCatalogAuth } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
-import { asArray, asNumber, asString, httpJson } from "../http.ts";
+import { asArray, asNumber, asString, httpJson, type HttpJson } from "../http.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
-type HttpJson = typeof httpJson;
 
 export function createAppleProvider(config: Config, http: HttpJson = httpJson): Provider {
   const catalog = hasAppleCatalogAuth(config);
@@ -34,13 +33,13 @@ export function createAppleProvider(config: Config, http: HttpJson = httpJson): 
     skipReason: () => (catalogAuthRejected ? "credentials_missing" : null),
     async getById(id) {
       if (catalog) {
-        return catalogSongById(id, appleToken(config));
+        return catalogSongById(id, await appleToken(config));
       }
       return itunesLookupById(http, id);
     },
     async getByIsrc(isrc) {
       if (catalog) {
-        const token = appleToken(config);
+        const token = await appleToken(config);
         const store = config.appleStorefront;
         const res = await catalogGet<{ data?: AppleSong[] }>(
           `https://api.music.apple.com/v1/catalog/${store}/songs?filter[isrc]=${encodeURIComponent(isrc)}`,
@@ -54,7 +53,7 @@ export function createAppleProvider(config: Config, http: HttpJson = httpJson): 
     async search(query: SearchQuery) {
       const term = `${query.artists[0] ?? ""} ${query.title}`.trim();
       if (catalog) {
-        const token = appleToken(config);
+        const token = await appleToken(config);
         const store = config.appleStorefront;
         const res = await catalogGet<{ results?: { songs?: { data?: AppleSong[] } } }>(
           `https://api.music.apple.com/v1/catalog/${store}/search?term=${encodeURIComponent(term)}&types=songs&limit=8`,
@@ -134,12 +133,7 @@ async function itunesLookupByIsrc(http: HttpJson, isrc: string): Promise<TrackHi
   const lookup = await http<{ results?: ItunesTrack[] }>(
     `https://itunes.apple.com/lookup?isrc=${encodeURIComponent(isrc)}&entity=song`,
   );
-  const hit = fromItunes(lookup.json?.results?.find((r) => r.trackId) ?? {});
-  if (hit) return hit;
-  const search = await http<{ results?: ItunesTrack[] }>(
-    `https://itunes.apple.com/search?term=${encodeURIComponent(isrc)}&entity=song&limit=5`,
-  );
-  return fromItunes(search.json?.results?.[0] ?? {});
+  return fromItunes(lookup.json?.results?.find((r) => r.trackId) ?? {});
 }
 
 async function itunesSearch(http: HttpJson, term: string): Promise<TrackHit[]> {
@@ -161,15 +155,34 @@ export function normalizeApplePrivateKey(raw: string): string {
   return `-----BEGIN ${label}-----\n${lines.join("\n")}\n-----END ${label}-----`;
 }
 
-export function appleToken(config: Config): string {
+const APPLE_TOKEN_TTL_S = 12 * 60 * 60;
+const appleTokens = new Map<string, { token: string; expiresAt: number }>();
+
+/**
+ * MusicKit developer token: ES256 JWT signed with the `.p8` key via WebCrypto
+ * (jose). Cached per isolate for most of its 12 h lifetime so a resolve does
+ * not re-sign on every catalog call.
+ */
+export async function appleToken(config: Config, now = Date.now()): Promise<string> {
   if (config.appleMusicToken) return config.appleMusicToken;
-  const key = normalizeApplePrivateKey(config.applePrivateKey ?? "");
-  return jwt.sign({}, key, {
-    algorithm: "ES256",
-    expiresIn: "12h",
-    issuer: config.appleTeamId,
-    header: { alg: "ES256", kid: config.appleKeyId },
-  });
+  const cacheKey = `${config.appleTeamId}|${config.appleKeyId}`;
+  const cached = appleTokens.get(cacheKey);
+  if (cached && cached.expiresAt - 10 * 60 * 1000 > now) return cached.token;
+  const key = await importPKCS8(normalizeApplePrivateKey(config.applePrivateKey ?? ""), "ES256");
+  const iat = Math.floor(now / 1000);
+  const token = await new SignJWT({})
+    .setProtectedHeader({ alg: "ES256", kid: config.appleKeyId })
+    .setIssuer(config.appleTeamId ?? "")
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + APPLE_TOKEN_TTL_S)
+    .sign(key);
+  appleTokens.set(cacheKey, { token, expiresAt: (iat + APPLE_TOKEN_TTL_S) * 1000 });
+  return token;
+}
+
+/** Test hook. */
+export function clearAppleTokenCache(): void {
+  appleTokens.clear();
 }
 
 function appleHeaders(token: string): Record<string, string> {

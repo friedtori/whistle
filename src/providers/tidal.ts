@@ -1,41 +1,19 @@
 import type { Config } from "../config.ts";
 import { hasTidalAuth } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
-import { asArray, asNumber, asRecord, asString, httpJson } from "../http.ts";
+import { asArray, asNumber, asRecord, asString, httpJson, type HttpJson } from "../http.ts";
+import { clientCredentialsToken } from "./token-cache.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
-interface TokenState {
-  accessToken: string;
-  expiresAt: number;
-}
-
-export function createTidalProvider(config: Config, request: typeof httpJson = httpJson): Provider {
-  let token: TokenState | null = null;
-
+export function createTidalProvider(config: Config, request: HttpJson = httpJson): Provider {
   async function bearer(): Promise<string | null> {
     if (!hasTidalAuth(config)) return null;
-    if (token && token.expiresAt > Date.now() + 30_000) return token.accessToken;
-    const basic = Buffer.from(`${config.tidalClientId}:${config.tidalClientSecret}`).toString(
-      "base64",
-    );
-    const res = await request<{ access_token?: string; expires_in?: number }>(
+    return clientCredentialsToken(
+      request,
       "https://auth.tidal.com/v1/oauth2/token",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${basic}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: "grant_type=client_credentials",
-      },
+      config.tidalClientId!,
+      config.tidalClientSecret!,
     );
-    const access = asString(res.json?.access_token);
-    if (!access) return null;
-    token = {
-      accessToken: access,
-      expiresAt: Date.now() + (res.json?.expires_in ?? 3600) * 1000,
-    };
-    return access;
   }
 
   async function tidalGet<T>(path: string): Promise<T | null> {
