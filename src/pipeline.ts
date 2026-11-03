@@ -1,19 +1,23 @@
-import type { Store } from "./db.ts";
-import { pickFuzzyMatch } from "./fuzzy.ts";
+import type { D1Store, RecordingRow, Store } from "./db.ts";
+import { destinationMatchesRecording, pickFuzzyMatch } from "./fuzzy.ts";
 import { HttpError, canonicalUrl, parseInput } from "./ids.ts";
 import type {
+  DestinationEvidence,
   IdentifierKind,
   MatchMethod,
   Platform,
   PlatformLink,
   Provider,
   ProviderMap,
-  Recording,
+  QueryMatchEvidence,
+  ResolveEvidence,
   ResolveQuery,
   ResolveResponse,
+  ReuseVia,
+  SourceEvidence,
   TrackHit,
 } from "./types.ts";
-import { PLATFORMS } from "./types.ts";
+import { MATCHING_RULE_VERSION, PLATFORMS } from "./types.ts";
 
 const ISRC_STAGE: Platform[] = ["deezer", "apple", "tidal", "musicbrainz"];
 const FUZZY_STAGE: Platform[] = ["deezer", "apple", "tidal", "ytm", "musicbrainz"];
@@ -29,24 +33,60 @@ const CONFIDENCE = {
 type IsrcOrigin = "trusted" | "fuzzy";
 
 export interface ResolveDeps {
-  db: Store;
+  db: D1Store;
   providers: ProviderMap;
+  /** Reported as `evidence.commit` when set (WHISTLE_GIT_COMMIT). */
+  commit?: string;
 }
 
+interface PipelineDeps {
+  db: Store;
+  providers: ProviderMap;
+  commit?: string;
+}
+
+type Session = PipelineDeps & { destNotes: Map<Platform, DestinationEvidence> };
+
+/**
+ * Resolve one input. Storage goes through a per-resolve unit of work: reads
+ * are served from one snapshot per recording and every write is committed in
+ * a single D1 transaction before the response is built.
+ */
 export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Promise<ResolveResponse> {
+  const unit = deps.db.unit();
+  return resolveInUnit(query, { ...deps, db: unit }, () => unit.commit());
+}
+
+async function resolveInUnit(
+  query: ResolveQuery,
+  deps: PipelineDeps,
+  commit: () => Promise<void>,
+): Promise<ResolveResponse> {
   const parsed = parseInput(query);
-  const cached = deps.db.findRecordingByIdentifier(parsed.kind, parsed.value);
+  const session: Session = { ...deps, destNotes: new Map() };
+  const cached = await deps.db.findRecordingByIdentifier(parsed.kind, parsed.value);
   if (cached) {
-    return present(deps.db, cached, true);
+    return await present(deps.db, cached, true, {
+      providers: deps.providers,
+      commit: deps.commit,
+      recordingReused: true,
+      reuseVia: "input_cache",
+      queryMatch: queryMatchFromRecording(deps.db, cached, parsed.kind),
+    });
   }
 
-  const source =
-    parsed.kind === "query"
-      ? await bootstrapFromSearch(parsed, deps.providers)
-      : await fetchSource(
-          { kind: parsed.kind, value: parsed.value, url: parsed.url },
-          deps.providers,
-        );
+  let source: TrackHit | null = null;
+  let fuzzyScore: number | undefined;
+  if (parsed.kind === "query") {
+    const picked = await bootstrapFromSearch(parsed, deps.providers);
+    source = picked?.hit ?? null;
+    fuzzyScore = picked?.confidence;
+  } else {
+    source = await fetchSource(
+      { kind: parsed.kind, value: parsed.value, url: parsed.url },
+      deps.providers,
+    );
+  }
   if (!source) {
     throw new HttpError(
       404,
@@ -57,35 +97,46 @@ export async function resolveTrack(query: ResolveQuery, deps: ResolveDeps): Prom
     );
   }
 
-  const recording = findOrCreateRecording(deps.db, source);
-  deps.db.addIdentifier(recording.id, parsed.kind, parsed.value);
-  rememberHit(
-    deps.db,
-    recording.id,
-    source,
-    methodForSource(parsed.kind, source),
-    parsed.kind === source.platform ? 1 : undefined,
-  );
-
+  const originConfidence = originConfidenceForInput(parsed.kind, source, fuzzyScore);
+  const found = await findOrCreateRecording(deps.db, source, originConfidence);
+  const recording = found.recording;
+  await deps.db.addIdentifier(recording.id, parsed.kind, parsed.value);
   const sourceMethod = methodForSource(parsed.kind, source);
+  const sourceConfidence =
+    parsed.kind === "query" ? fuzzyScore : parsed.kind === source.platform ? 1 : undefined;
+  await rememberHit(deps.db, recording.id, source, sourceMethod, sourceConfidence);
+  noteDestination(session, source, true, sourceMethod, sourceConfidence ?? (sourceMethod === "fuzzy" ? fuzzyScore : undefined));
+
   const isrcs = new IsrcBag();
   if (parsed.kind === "isrc") isrcs.add([parsed.value], "trusted");
   isrcs.add(
     collectIsrcs(source),
     sourceMethod === "fuzzy" || parsed.kind === "query" ? "fuzzy" : "trusted",
   );
-  for (const isrc of isrcs.trusted()) deps.db.addIdentifier(recording.id, "isrc", isrc);
+  for (const isrc of isrcs.trusted()) await deps.db.addIdentifier(recording.id, "isrc", isrc);
 
   const triedIsrcs = new Set<string>();
-  await runIsrcStage(deps, recording.id, isrcs, triedIsrcs);
-  await runMbStage(deps, recording.id, isrcs, source);
-  await runIsrcStage(deps, recording.id, isrcs, triedIsrcs);
-  await runFuzzyStage(deps, recording.id, source);
-  await runSpotifyLast(deps, recording.id, isrcs, source, triedIsrcs);
-  fillUnmatched(deps, recording.id);
+  await runIsrcStage(session, recording.id, isrcs, triedIsrcs);
+  await runMbStage(session, recording.id, isrcs, source);
+  await runIsrcStage(session, recording.id, isrcs, triedIsrcs);
+  await runFuzzyStage(session, recording.id, source);
+  await runSpotifyLast(session, recording.id, isrcs, source, triedIsrcs);
+  await fillUnmatched(session, recording.id);
 
-  const latest = deps.db.findRecordingById(recording.id)!;
-  return present(deps.db, latest, false);
+  await commit();
+  const latest = (await deps.db.findRecordingById(recording.id))!;
+  return await present(deps.db, latest, false, {
+    providers: deps.providers,
+    commit: deps.commit,
+    recordingReused: found.reused,
+    reuseVia: found.reuseVia,
+    source,
+    queryMatch: {
+      method: sourceMethod,
+      confidence: sourceConfidence ?? originConfidence,
+    },
+    destNotes: session.destNotes,
+  });
 }
 
 async function fetchSource(
@@ -126,52 +177,81 @@ async function fetchSource(
   return null;
 }
 
-function findOrCreateRecording(db: Store, source: TrackHit) {
+function originConfidenceForInput(
+  kind: IdentifierKind,
+  source: TrackHit,
+  fuzzyScore?: number,
+): number {
+  if (kind === "query") return fuzzyScore ?? 0.65;
+  if (kind === "isrc") return CONFIDENCE.isrc;
+  if (kind === source.platform) return 1;
+  return CONFIDENCE.mb_relation;
+}
+
+async function findOrCreateRecording(
+  db: Store,
+  source: TrackHit,
+  originConfidence: number,
+): Promise<{ recording: RecordingRow; reused: boolean; reuseVia: ReuseVia }> {
   if (source.isrc) {
-    const byIsrc = db.findRecordingByIdentifier("isrc", source.isrc.toUpperCase().replace(/[-\s]/g, ""));
-    if (byIsrc) return byIsrc;
+    const byIsrc = await db.findRecordingByIdentifier("isrc", source.isrc.toUpperCase().replace(/[-\s]/g, ""));
+    if (byIsrc) {
+      if (destinationMatchesRecording(byIsrc, source)) {
+        await db.setOriginConfidence(byIsrc.id, originConfidence);
+        return { recording: byIsrc, reused: true, reuseVia: "isrc" };
+      }
+    }
   }
   if (source.mbid) {
-    const byMbid = db.findRecordingByMbid(source.mbid) ?? db.findRecordingByIdentifier("musicbrainz", source.mbid);
-    if (byMbid) {
-      if (!byMbid.mbid) db.updateRecording(byMbid.id, { mbid: source.mbid });
-      return byMbid;
+    const byMbid = await db.findRecordingByMbid(source.mbid) ?? await db.findRecordingByIdentifier("musicbrainz", source.mbid);
+    if (byMbid && destinationMatchesRecording(byMbid, source)) {
+      if (!byMbid.mbid) await db.updateRecording(byMbid.id, { mbid: source.mbid });
+      await db.setOriginConfidence(byMbid.id, originConfidence);
+      return { recording: byMbid, reused: true, reuseVia: "mbid" };
     }
   }
   if (source.platform !== "musicbrainz") {
-    const byId = db.findRecordingByIdentifier(source.platform, source.id);
-    if (byId) return byId;
+    const byId = await db.findRecordingByIdentifier(source.platform, source.id);
+    if (byId && destinationMatchesRecording(byId, source)) {
+      await db.setOriginConfidence(byId.id, originConfidence);
+      return { recording: byId, reused: true, reuseVia: "platform_id" };
+    }
   }
-  return db.createRecording({
-    title: source.title,
-    artists: source.artists,
-    duration_ms: source.duration_ms,
-    mbid: source.mbid ?? null,
-  });
+  return {
+    recording: await db.createRecording({
+      title: source.title,
+      artists: source.artists,
+      duration_ms: source.duration_ms,
+      mbid: source.mbid ?? null,
+      origin_confidence: originConfidence,
+    }),
+    reused: false,
+    reuseVia: null,
+  };
 }
 
-function rememberHit(
+async function rememberHit(
   db: Store,
   recordingId: string,
   hit: TrackHit,
   method: MatchMethod,
   confidence?: number,
-): void {
+): Promise<void> {
   if (hit.platform !== "musicbrainz") {
-    db.addIdentifier(recordingId, hit.platform, hit.id);
+    await db.addIdentifier(recordingId, hit.platform, hit.id);
   } else {
-    db.addIdentifier(recordingId, "musicbrainz", hit.id);
-    db.updateRecording(recordingId, { mbid: hit.id });
+    await db.addIdentifier(recordingId, "musicbrainz", hit.id);
+    await db.updateRecording(recordingId, { mbid: hit.id });
   }
   if (method !== "fuzzy" && method !== "isrc_from_fuzzy") {
     for (const isrc of collectIsrcs(hit)) {
-      db.addIdentifier(recordingId, "isrc", isrc);
+      await db.addIdentifier(recordingId, "isrc", isrc);
     }
   }
-  if (hit.mbid) db.updateRecording(recordingId, { mbid: hit.mbid });
+  if (hit.mbid) await db.updateRecording(recordingId, { mbid: hit.mbid });
   const resolvedConfidence =
     confidence ?? (method === "fuzzy" ? 0.65 : CONFIDENCE[method as keyof typeof CONFIDENCE] ?? 0.9);
-  db.upsertLink({
+  await db.upsertLink({
     recordingId,
     platform: hit.platform,
     url: hit.url,
@@ -193,14 +273,14 @@ function methodForSource(kind: IdentifierKind, source: TrackHit): MatchMethod {
 async function bootstrapFromSearch(
   parsed: { artist?: string; title?: string; album?: string; duration_ms?: number },
   providers: ProviderMap,
-): Promise<TrackHit | null> {
+): Promise<{ hit: TrackHit; confidence: number } | null> {
   const artist = parsed.artist?.trim() ?? "";
   const title = parsed.title?.trim() ?? "";
   const album = parsed.album?.trim() || undefined;
   const duration_ms = parsed.duration_ms ?? null;
   if (!artist || !title || duration_ms == null) return null;
 
-  const probe = { title, artists: [artist], duration_ms, album };
+  const probe = { title, duration_ms, album, artists: artist };
   for (const platform of SEARCH_BOOTSTRAP) {
     const provider = providers[platform];
     if (!provider.enabled) continue;
@@ -213,7 +293,7 @@ async function bootstrapFromSearch(
           pickFuzzyMatch(probe, candidates) !== null,
       });
       const picked = pickFuzzyMatch(probe, hits);
-      if (picked) return picked.hit;
+      if (picked) return picked;
     } catch (err) {
       warn(platform, "search", err);
     }
@@ -222,32 +302,34 @@ async function bootstrapFromSearch(
 }
 
 async function runIsrcStage(
-  deps: ResolveDeps,
+  deps: Session,
   recordingId: string,
   isrcs: IsrcBag,
   tried: Set<string>,
 ): Promise<void> {
   if (isrcs.size === 0) return;
   for (const platform of ISRC_STAGE) {
-    if (hasMatch(deps.db, recordingId, platform)) continue;
+    if (await hasMatch(deps.db, recordingId, platform)) continue;
     const provider = deps.providers[platform];
     if (!provider.enabled || !provider.supportsIsrcLookup) continue;
     const trusted = await firstIsrcHit(provider, isrcs.trusted(), platform, tried);
     if (trusted) {
-      rememberHit(deps.db, recordingId, trusted, "isrc");
-      isrcs.add(collectIsrcs(trusted), "trusted");
-      continue;
+      if (await acceptDestinationHit(deps, recordingId, trusted, "isrc")) {
+        isrcs.add(collectIsrcs(trusted), "trusted");
+        continue;
+      }
     }
     const derived = await firstIsrcHit(provider, isrcs.fuzzy(), platform, tried);
     if (derived) {
-      rememberHit(deps.db, recordingId, derived, "isrc_from_fuzzy");
-      isrcs.add(collectIsrcs(derived), "fuzzy");
+      if (await acceptDestinationHit(deps, recordingId, derived, "isrc_from_fuzzy")) {
+        isrcs.add(collectIsrcs(derived), "fuzzy");
+      }
     }
   }
 }
 
 async function runMbStage(
-  deps: ResolveDeps,
+  deps: Session,
   recordingId: string,
   isrcs: IsrcBag,
   source: TrackHit,
@@ -255,16 +337,21 @@ async function runMbStage(
   const mb = deps.providers.musicbrainz;
   if (!mb.enabled) return;
 
-  let recording = deps.db.findRecordingById(recordingId)!;
+  let recording = (await deps.db.findRecordingById(recordingId))!;
   let mbid = recording.mbid;
-  let mbOrigin: IsrcOrigin | null = mbid ? "trusted" : null;
+  // An mbid attached earlier in this resolve by a fuzzy or isrc_from_fuzzy MB
+  // hop keeps that provenance; otherwise its sibling ISRCs would be laundered
+  // into trusted ISRCs and surface as `method: "isrc"` at 0.98.
+  const mbLink = (await deps.db.listLinks(recordingId)).find((link) => link.platform === "musicbrainz" && !link.unmatched);
+  const mbLinkFuzzy = mbLink?.method === "fuzzy" || mbLink?.method === "isrc_from_fuzzy";
+  let mbOrigin: IsrcOrigin | null = mbid ? (mbLinkFuzzy ? "fuzzy" : "trusted") : null;
 
   if (!mbid) {
     for (const isrc of isrcs.trusted()) {
       try {
         const hit = await mb.getByIsrc(isrc);
         if (hit?.mbid) {
-          rememberHit(deps.db, recordingId, hit, "isrc");
+          if (!await acceptDestinationHit(deps, recordingId, hit, "isrc")) continue;
           isrcs.add(collectIsrcs(hit), "trusted");
           mbid = hit.mbid;
           mbOrigin = "trusted";
@@ -278,18 +365,26 @@ async function runMbStage(
 
   if (!mbid) {
     try {
+      const mbProbe = {
+        title: source.title,
+        duration_ms: source.duration_ms,
+        album: source.album,
+        artists: source.artists,
+      };
       const hits = await mb.search({
         title: source.title,
         artists: source.artists,
         duration_ms: source.duration_ms,
-        acceptHits: (candidates) => pickFuzzyMatch(source, candidates) !== null,
+        acceptHits: (candidates) =>
+          pickFuzzyMatch(mbProbe, candidates) !== null,
       });
-      const picked = pickFuzzyMatch(source, hits);
-      if (picked) {
-        rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
+      const picked = pickFuzzyMatch(mbProbe, hits);
+      if (picked && await acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence)) {
         isrcs.add(collectIsrcs(picked.hit), "fuzzy");
         mbid = picked.hit.mbid ?? picked.hit.id;
         mbOrigin = "fuzzy";
+      } else {
+        await noteContradictoryHits(deps, recordingId, "musicbrainz", hits);
       }
     } catch (err) {
       warn("musicbrainz", "search", err);
@@ -302,9 +397,25 @@ async function runMbStage(
     const { relations, isrcs: siblingIsrcs } = await mb.getUrlRelations(mbid);
     isrcs.add(siblingIsrcs, mbOrigin ?? "fuzzy");
     for (const rel of relations) {
-      if (hasMatch(deps.db, recordingId, rel.platform)) continue;
-      deps.db.addIdentifier(recordingId, rel.platform, rel.id);
-      deps.db.upsertLink({
+      if (await hasMatch(deps.db, recordingId, rel.platform)) continue;
+      const dest = deps.providers[rel.platform];
+      if (dest?.enabled) {
+        try {
+          const destHit = await dest.getById(rel.id);
+          if (!destHit) continue;
+          const selected = (await deps.db.findRecordingById(recordingId))!;
+          if (!destinationMatchesRecording(selected, destHit)) {
+            noteDestination(deps, destHit, false, "mb_relation", 0, "destination_mismatch");
+            await markUnmatched(deps.db, recordingId, rel.platform, "destination_mismatch");
+            continue;
+          }
+        } catch (err) {
+          warn(rel.platform, "getById", err);
+          continue;
+        }
+      }
+      await deps.db.addIdentifier(recordingId, rel.platform, rel.id);
+      await deps.db.upsertLink({
         recordingId,
         platform: rel.platform,
         url: rel.url,
@@ -318,9 +429,9 @@ async function runMbStage(
     warn("musicbrainz", "getUrlRelations", err);
   }
 
-  recording = deps.db.findRecordingById(recordingId)!;
-  if (recording.mbid && !hasMatch(deps.db, recordingId, "musicbrainz")) {
-    deps.db.upsertLink({
+  recording = (await deps.db.findRecordingById(recordingId))!;
+  if (recording.mbid && !await hasMatch(deps.db, recordingId, "musicbrainz")) {
+    await deps.db.upsertLink({
       recordingId,
       platform: "musicbrainz",
       url: canonicalUrl("musicbrainz", recording.mbid),
@@ -332,27 +443,33 @@ async function runMbStage(
   }
 }
 
-async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: TrackHit): Promise<void> {
-  const recording = deps.db.findRecordingById(recordingId)!;
+async function runFuzzyStage(deps: Session, recordingId: string, source: TrackHit): Promise<void> {
+  const recording = (await deps.db.findRecordingById(recordingId))!;
+  const artists = recording.artists.length ? recording.artists : source.artists;
   const probe = {
     title: recording.title || source.title,
-    artists: recording.artists.length ? recording.artists : source.artists,
     duration_ms: recording.duration_ms ?? source.duration_ms,
     album: source.album,
+    artists,
   };
   for (const platform of FUZZY_STAGE) {
-    if (hasMatch(deps.db, recordingId, platform)) continue;
+    if (await hasMatch(deps.db, recordingId, platform)) continue;
     const provider = deps.providers[platform];
     if (!provider.enabled) continue;
     try {
       const hits = await provider.search({
         title: probe.title,
-        artists: recording.artists.length ? recording.artists : source.artists,
+        artists,
         duration_ms: probe.duration_ms,
-        acceptHits: (candidates) => pickFuzzyMatch(probe, candidates) !== null,
+        acceptHits: (candidates) =>
+          pickFuzzyMatch(probe, candidates) !== null,
       });
       const picked = pickFuzzyMatch(probe, hits);
-      if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
+      if (picked) {
+        await acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence);
+      } else {
+        await noteContradictoryHits(deps, recordingId, platform, hits);
+      }
     } catch (err) {
       warn(platform, "search", err);
     }
@@ -360,56 +477,62 @@ async function runFuzzyStage(deps: ResolveDeps, recordingId: string, source: Tra
 }
 
 async function runSpotifyLast(
-  deps: ResolveDeps,
+  deps: Session,
   recordingId: string,
   isrcs: IsrcBag,
   source: TrackHit,
   tried: Set<string>,
 ): Promise<void> {
-  if (hasMatch(deps.db, recordingId, "spotify")) return;
+  if (await hasMatch(deps.db, recordingId, "spotify")) return;
   const provider = deps.providers.spotify;
   if (!provider.enabled) return;
 
   if (provider.supportsIsrcLookup) {
     const trusted = await firstIsrcHit(provider, isrcs.trusted(), "spotify", tried);
-    if (trusted) {
-      rememberHit(deps.db, recordingId, trusted, "isrc");
+    if (trusted && await acceptDestinationHit(deps, recordingId, trusted, "isrc")) {
       return;
     }
     const derived = await firstIsrcHit(provider, isrcs.fuzzy(), "spotify", tried);
-    if (derived) {
-      rememberHit(deps.db, recordingId, derived, "isrc_from_fuzzy");
+    if (derived && await acceptDestinationHit(deps, recordingId, derived, "isrc_from_fuzzy")) {
       return;
     }
   }
 
-  const recording = deps.db.findRecordingById(recordingId)!;
+  const recording = (await deps.db.findRecordingById(recordingId))!;
   try {
+    const artists = recording.artists.length ? recording.artists : source.artists;
     const probe = {
       title: recording.title || source.title,
-      artists: recording.artists.length ? recording.artists : source.artists,
       duration_ms: recording.duration_ms ?? source.duration_ms,
       album: source.album,
+      artists,
     };
     const hits = await provider.search({
       title: probe.title,
-      artists: recording.artists.length ? recording.artists : source.artists,
+      artists,
       duration_ms: probe.duration_ms,
-      acceptHits: (candidates) => pickFuzzyMatch(probe, candidates) !== null,
+      acceptHits: (candidates) =>
+        pickFuzzyMatch(probe, candidates) !== null,
     });
     const picked = pickFuzzyMatch(probe, hits);
-    if (picked) rememberHit(deps.db, recordingId, picked.hit, "fuzzy", picked.confidence);
+    if (picked) {
+      await acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence);
+    } else {
+      await noteContradictoryHits(deps, recordingId, "spotify", hits);
+    }
   } catch (err) {
     warn("spotify", "search", err);
   }
 }
 
-function fillUnmatched(deps: ResolveDeps, recordingId: string): void {
-  const existing = new Map(deps.db.listLinks(recordingId).map((link) => [link.platform, link]));
+async function fillUnmatched(deps: Session, recordingId: string): Promise<void> {
+  const existing = new Map((await deps.db.listLinks(recordingId)).map((link) => [link.platform, link]));
   for (const platform of PLATFORMS) {
-    if (existing.get(platform) && !existing.get(platform)!.unmatched) continue;
+    const current = existing.get(platform);
+    if (current && !current.unmatched) continue;
+    if (current?.skip_reason === "destination_mismatch") continue;
     const provider = deps.providers[platform];
-    deps.db.upsertLink({
+    await deps.db.upsertLink({
       recordingId,
       platform,
       url: null,
@@ -463,8 +586,8 @@ function uniqueIsrcs(values: Array<string | null | undefined>): string[] {
   return out;
 }
 
-function hasMatch(db: Store, recordingId: string, platform: Platform): boolean {
-  return db.listLinks(recordingId).some((link) => link.platform === platform && !link.unmatched);
+async function hasMatch(db: Store, recordingId: string, platform: Platform): Promise<boolean> {
+  return (await db.listLinks(recordingId)).some((link) => link.platform === platform && !link.unmatched);
 }
 
 async function firstIsrcHit(
@@ -487,9 +610,95 @@ async function firstIsrcHit(
   return null;
 }
 
-function present(db: Store, recording: Recording, cached: boolean): ResolveResponse {
-  const identifiers = db.listIdentifiers(recording.id).map(({ kind, value }) => ({ kind, value }));
-  const links = completeLinks(db.listLinks(recording.id));
+async function acceptDestinationHit(
+  deps: Session,
+  recordingId: string,
+  hit: TrackHit,
+  method: MatchMethod,
+  confidence?: number,
+): Promise<boolean> {
+  const recording = (await deps.db.findRecordingById(recordingId))!;
+  if (!destinationMatchesRecording(recording, hit)) {
+    noteDestination(deps, hit, false, method, 0, "destination_mismatch");
+    await markUnmatched(deps.db, recordingId, hit.platform, "destination_mismatch");
+    return false;
+  }
+  await rememberHit(deps.db, recordingId, hit, method, confidence);
+  noteDestination(deps, hit, true, method, confidence);
+  return true;
+}
+
+async function noteContradictoryHits(
+  deps: Session,
+  recordingId: string,
+  platform: Platform,
+  hits: TrackHit[],
+): Promise<void> {
+  if (hits.length === 0 || await hasMatch(deps.db, recordingId, platform)) return;
+  const recording = (await deps.db.findRecordingById(recordingId))!;
+  const mismatch = hits.find((candidate) => !destinationMatchesRecording(recording, candidate));
+  if (!hits.some((candidate) => destinationMatchesRecording(recording, candidate))) {
+    if (mismatch) noteDestination(deps, mismatch, false, "fuzzy", 0, "destination_mismatch");
+    await markUnmatched(deps.db, recordingId, platform, "destination_mismatch");
+  }
+}
+
+
+function noteDestination(
+  session: Session,
+  hit: TrackHit,
+  accepted: boolean,
+  method: MatchMethod | null,
+  confidence?: number,
+  reason?: string | null,
+): void {
+  session.destNotes.set(hit.platform, {
+    platform: hit.platform,
+    accepted,
+    reason: reason ?? null,
+    method: accepted ? method : null,
+    confidence: accepted ? (confidence ?? 0) : 0,
+    title: hit.title,
+    artists: hit.artists,
+    album: hit.album ?? null,
+    duration_ms: hit.duration_ms,
+    isrc: hit.isrc ?? null,
+    url: hit.url,
+  });
+}
+
+async function markUnmatched(db: Store, recordingId: string, platform: Platform, skipReason: string): Promise<void> {
+  if (await hasMatch(db, recordingId, platform)) return;
+  await db.upsertLink({
+    recordingId,
+    platform,
+    url: null,
+    duration_ms: null,
+    confidence: 0,
+    method: null,
+    unmatched: true,
+    skip_reason: skipReason,
+  });
+}
+
+export interface PresentExtras {
+  providers?: ProviderMap;
+  commit?: string;
+  recordingReused?: boolean;
+  reuseVia?: ReuseVia;
+  source?: TrackHit | null;
+  queryMatch?: QueryMatchEvidence | null;
+  destNotes?: Map<Platform, DestinationEvidence>;
+}
+
+export async function present(
+  db: Store,
+  recording: RecordingRow,
+  cached: boolean,
+  extras: PresentExtras = {},
+): Promise<ResolveResponse> {
+  const identifiers = (await db.listIdentifiers(recording.id)).map(({ kind, value }) => ({ kind, value }));
+  const links = completeLinks(await db.listLinks(recording.id));
   return {
     recording: {
       id: recording.id,
@@ -498,10 +707,141 @@ function present(db: Store, recording: Recording, cached: boolean): ResolveRespo
       duration_ms: recording.duration_ms,
       mbid: recording.mbid,
     },
+    recording_confidence: await recordingConfidence(db, recording),
     identifiers,
     links,
     cached,
+    evidence: await buildEvidence(db, recording, links, cached, extras),
   };
+}
+
+async function buildEvidence(
+  db: Store,
+  recording: RecordingRow,
+  links: PlatformLink[],
+  cached: boolean,
+  extras: PresentExtras,
+): Promise<ResolveEvidence> {
+  const providersEnabled = extras.providers
+    ? PLATFORMS.filter((platform) => extras.providers![platform].enabled)
+    : PLATFORMS.filter((platform) => {
+        const link = links.find((item) => item.platform === platform);
+        return link?.skip_reason !== "credentials_missing";
+      });
+  const credentialsSkipped = extras.providers
+    ? PLATFORMS.filter((platform) => {
+        const provider = extras.providers![platform];
+        return provider.skipReason?.() === "credentials_missing" || !provider.enabled;
+      }).length
+    : links.filter((link) => link.skip_reason === "credentials_missing").length;
+
+  const evidence: ResolveEvidence = {
+    matching_rule_version: MATCHING_RULE_VERSION,
+    cached,
+    recording_reused: extras.recordingReused ?? false,
+    reuse_via: extras.reuseVia ?? null,
+    query_match: extras.queryMatch ?? queryMatchFromRecording(db, recording),
+    source: extras.source ? sourceEvidenceFromHit(extras.source) : await sourceEvidenceFromRecording(db, recording),
+    destinations: buildDestinations(links, extras.destNotes),
+    providers_enabled: providersEnabled,
+    credentials_skipped: credentialsSkipped,
+  };
+  if (extras.commit) evidence.commit = extras.commit;
+  return evidence;
+}
+
+function sourceEvidenceFromHit(hit: TrackHit): SourceEvidence {
+  return {
+    platform: hit.platform,
+    id: hit.id,
+    title: hit.title,
+    artists: hit.artists,
+    album: hit.album ?? null,
+    duration_ms: hit.duration_ms,
+    isrc: hit.isrc ?? null,
+  };
+}
+
+async function sourceEvidenceFromRecording(db: Store, recording: RecordingRow): Promise<SourceEvidence | null> {
+  const identifiers = await db.listIdentifiers(recording.id);
+  const links = await db.listLinks(recording.id);
+  const platformId = identifiers.find((id) => id.kind !== "isrc" && id.kind !== "query");
+  const isrc = identifiers.find((id) => id.kind === "isrc");
+  const link =
+    (platformId
+      ? links.find((item) => item.platform === platformId.kind && !item.unmatched)
+      : undefined) ?? links.find((item) => !item.unmatched);
+  if (!platformId && !link) return null;
+  return {
+    platform: (platformId?.kind as Platform | undefined) ?? link!.platform,
+    id: platformId?.value ?? "",
+    title: recording.title,
+    artists: recording.artists,
+    album: null,
+    duration_ms: recording.duration_ms,
+    isrc: isrc?.value ?? null,
+  };
+}
+
+function queryMatchFromRecording(
+  _db: Store,
+  _recording: RecordingRow,
+  kind?: IdentifierKind,
+): QueryMatchEvidence {
+  if (kind === "query") {
+    return { method: "fuzzy", confidence: null, reason: "reconstructed_from_cache" };
+  }
+  if (kind === "isrc") {
+    return { method: "isrc", confidence: null, reason: "reconstructed_from_cache" };
+  }
+  return { method: null, confidence: null, reason: "reconstructed_from_cache" };
+}
+
+function buildDestinations(
+  links: PlatformLink[],
+  notes?: Map<Platform, DestinationEvidence>,
+): DestinationEvidence[] {
+  return PLATFORMS.map((platform) => {
+    const link = links.find((item) => item.platform === platform);
+    const note = notes?.get(platform);
+    if (note) {
+      return {
+        ...note,
+        accepted: link ? !link.unmatched : note.accepted,
+        method: link && !link.unmatched ? link.method : note.method,
+        confidence: link && !link.unmatched ? link.confidence : note.confidence,
+        reason: link?.skip_reason ?? note.reason,
+        duration_ms: link?.duration_ms ?? note.duration_ms,
+        url: link && !link.unmatched ? link.url : (note.url ?? link?.url ?? null),
+      };
+    }
+    return {
+      platform,
+      accepted: link ? !link.unmatched : false,
+      reason: link?.skip_reason ?? null,
+      method: link?.method ?? null,
+      confidence: link?.confidence ?? 0,
+      url: link?.url ?? null,
+      duration_ms: link?.duration_ms ?? null,
+    };
+  });
+}
+
+async function recordingConfidence(db: Store, recording: RecordingRow): Promise<number> {
+  if (recording.origin_confidence != null) return recording.origin_confidence;
+  const identifiers = await db.listIdentifiers(recording.id);
+  const links = await db.listLinks(recording.id);
+  if (identifiers.some((id) => id.kind === "query")) {
+    const fuzzy = links.find((link) => link.method === "fuzzy" && !link.unmatched);
+    return fuzzy?.confidence ?? 0.65;
+  }
+  const direct = identifiers.some(
+    (id) =>
+      id.kind !== "isrc" &&
+      id.kind !== "query" &&
+      links.some((link) => link.platform === id.kind && !link.unmatched && link.confidence === 1),
+  );
+  return direct ? 1 : 0.98;
 }
 
 function completeLinks(links: PlatformLink[]): PlatformLink[] {

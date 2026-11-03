@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "whistle",
+  "main": "src/worker.ts",
+  // Must not be newer than the workerd bundled with @cloudflare/vitest-pool-workers.
+  "compatibility_date": "2026-08-15",
+
+  // Served only on the custom domain so zone WAF and rate limiting run first
+  // (same setup as the gum-license Worker on api.typetenor.com).
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "whistle.typetenor.com", "custom_domain": true }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "whistle",
+      // Replace with the id printed by `wrangler d1 create whistle` (see DEPLOY.md).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // One global instance serializes every MusicBrainz request (<= 1 req/s).
+  "durable_objects": {
+    "bindings": [{ "name": "MUSICBRAINZ_GATE", "class_name": "MusicBrainzGate" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MusicBrainzGate"] }],
+
+  // Non-secret configuration. Credentials are Wrangler secrets, never vars
+  // (see README "Secrets" and DEPLOY.md).
+  "vars": {
+    "MUSICBRAINZ_USER_AGENT": "Whistle/1.0 ( https://github.com/friedtori/whistle )",
+    "APPLE_STOREFRONT": "us",
+    "TIDAL_COUNTRY": "US",
+    // Workers subrequest limit per invocation: 1000 on Workers Paid, 50 on Free.
+    "SUBREQUEST_LIMIT": "1000",
+    // Upper bound on provider calls (fetch + MusicBrainz gate) for one resolve.
+    "RESOLVE_SUBREQUEST_CAP": "40",
+    // POST /v1/resolve/batch input cap. 20 x (40 + D1) stays under 1000.
+    "BATCH_MAX_INPUTS": "20"
+  },
+
+  "observability": { "enabled": true }
+}

@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -14,5 +16,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Workers runtime tests: local D1 + Durable Objects via Miniflare, no Cloudflare account.
       - run: npm test
       - run: npm run typecheck
+      # Bundle with the real wrangler.jsonc without deploying (no credentials needed).
+      - run: npx wrangler deploy --dry-run --outdir dist

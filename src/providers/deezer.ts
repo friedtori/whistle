@@ -1,9 +1,8 @@
 import { canonicalUrl } from "../ids.ts";
-import { asArray, asNumber, asString, httpJson } from "../http.ts";
+import { asArray, asNumber, asString, httpJson, type HttpJson } from "../http.ts";
 import { quoteSearchValue, searchWithPlainFallback } from "./search.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
-type HttpJson = typeof httpJson;
 
 interface DeezerTrack {
   id?: number;
