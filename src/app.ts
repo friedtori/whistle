@@ -2,7 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { z } from "zod";
 import type { Store } from "./db.ts";
 import { HttpError, normalizePlatform } from "./ids.ts";
-import { resolveTrack, type ResolveDeps } from "./pipeline.ts";
+import { present, resolveTrack, type ResolveDeps } from "./pipeline.ts";
 import type { Platform, ProviderMap, ResolveQuery } from "./types.ts";
 import { PLATFORMS } from "./types.ts";
 
@@ -107,23 +107,7 @@ export function createApp(deps: AppDeps): Express {
     try {
       const recording = deps.db.findRecordingById(req.params.id);
       if (!recording) throw new HttpError(404, "not_found", "Recording not found");
-      const identifiers = deps.db.listIdentifiers(recording.id).map(({ kind, value }) => ({
-        kind,
-        value,
-      }));
-      const links = deps.db.listLinks(recording.id);
-      res.json({
-        recording: {
-          id: recording.id,
-          title: recording.title,
-          artists: recording.artists,
-          duration_ms: recording.duration_ms,
-          mbid: recording.mbid,
-        },
-        identifiers,
-        links,
-        cached: true,
-      });
+      res.json(present(deps.db, recording, true, { providers: deps.providers }));
     } catch (err) {
       next(err);
     }

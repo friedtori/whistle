@@ -15,6 +15,7 @@ import { newId } from "./ids.ts";
 export interface RecordingRow extends Recording {
   created_at: string;
   updated_at: string;
+  origin_confidence: number | null;
 }
 
 interface IdentifierRow {
@@ -63,6 +64,7 @@ export class Store {
         artists TEXT NOT NULL,
         duration_ms INTEGER,
         mbid TEXT,
+        origin_confidence REAL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -100,6 +102,14 @@ export class Store {
         status TEXT NOT NULL DEFAULT 'pending'
       );
     `);
+    this.ensureColumn("recordings", "origin_confidence", "REAL");
+  }
+
+  private ensureColumn(table: string, name: string, type: string): void {
+    const cols = this.raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === name)) {
+      this.raw.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    }
   }
 
   findRecordingById(id: string): RecordingRow | null {
@@ -127,13 +137,15 @@ export class Store {
     return row ? this.toRecording(row) : null;
   }
 
-  createRecording(input: Omit<Recording, "id"> & { id?: string }): RecordingRow {
+  createRecording(
+    input: Omit<Recording, "id"> & { id?: string; origin_confidence?: number | null },
+  ): RecordingRow {
     const now = new Date().toISOString();
     const id = input.id ?? newId();
     this.raw
       .prepare(
-        `INSERT INTO recordings (id, title, artists, duration_ms, mbid, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO recordings (id, title, artists, duration_ms, mbid, origin_confidence, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -141,10 +153,19 @@ export class Store {
         JSON.stringify(input.artists),
         input.duration_ms,
         input.mbid,
+        input.origin_confidence ?? null,
         now,
         now,
       );
     return this.findRecordingById(id)!;
+  }
+
+  setOriginConfidence(id: string, value: number): void {
+    const current = this.findRecordingById(id);
+    if (!current || current.origin_confidence != null) return;
+    this.raw
+      .prepare("UPDATE recordings SET origin_confidence = ?, updated_at = ? WHERE id = ?")
+      .run(value, new Date().toISOString(), id);
   }
 
   updateRecording(
@@ -302,6 +323,7 @@ export class Store {
       artists,
       duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
       mbid: row.mbid == null ? null : String(row.mbid),
+      origin_confidence: row.origin_confidence == null ? null : Number(row.origin_confidence),
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     };
