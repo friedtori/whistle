@@ -1,5 +1,24 @@
 # Match correctness — archive vs current rules
 
+## Reconciled with main@c26f802 (rule `2026-11-03.identity-destination.3`)
+
+PR #5 was written against main@ecf605b. main later gained c26f802 (“Tighten fuzzy matching and fix TIDAL catalog search”), which raised the fuzzy title gate to 0.8, added a 0.8 primary-artist gate, removed the substring-title bonus, kept parentheses in title similarity, required version-bearing titles to agree, added `demo`/`session` families, and stated that cross-script transliteration is not implemented. Where the two disagree on a **fuzzy acceptance** gate, main’s gate wins. PR #5’s destination contradiction check, recording-reuse guard, URL/album version scan, `acapella` family, collapsed titles, dual confidence and evidence are kept on top.
+
+`npm run replay:seed-archive -- --out=artifacts/match-correctness/named-replay-reconciled.json` (dry, no DSP, no archive JSONL in the repo, so cases are synthesized from `tests/fixtures/seed-archive/named-cases.json`):
+
+| Case | PR #5 (rule .2) | Reconciled (rule .3) | Why |
+| --- | --- | --- | --- |
+| Oh No Now My, SYW, HandsOn, Pigwig, Dexter | reject | reject (`title`) | unchanged |
+| thicc (album = remix) | reject vs acapella; **accept** remix | **reject** acapella, remix, and both (`version_keyword` / `title`) | a bare `thicc` query title no longer matches a named remix title |
+| Midnight Sun (Super Loud only) | version-review (accept) | **reject** (`title`, 0.5 < 0.8) | parentheses count in title similarity; bare title still preferred when both exist |
+| Sneaker Pimps / Spin Spin Sugar / Becoming Remixed | **accept** Armand’s Dark Garage Mix | **reject** (`title`, 2/7) | substring bonus removed; the exact mix title still resolves |
+| AL-90 Cyrillic | accept | accept | unchanged |
+| Featured-artist query `Ariana Grande feat. Iggy Azalea` | accept | **reject** (`artist`, 0.5 < 0.8) | primary-artist gate; main documents joint credits “may be rejected” |
+| 気分上々↑↑ vs Kibun Jou Jou (fuzzy) | accept (transliteration hatch) | **reject** (`title`) | fuzzy acceptance has no transliteration; the hatch remains only in the destination contradiction check for ISRC/MB-backed hops |
+| Five ISRC Apple URL-version leaks | unmatched `destination_mismatch` | unchanged | |
+
+The tables below are PR #5’s original analysis against the seed archive and are kept as historical evidence for rule `.2`. `named-replay.json` is PR #5’s original output (it was generated with the archive JSONL at `/tmp/whistle-seed`, which is not in the repository).
+
 Provenance: `/tmp/whistle-seed` unpacked export (results-fuzzy.jsonl 900, results-isrc.jsonl 374). No commit field. Produced against **main@ecf605b** (has `isrc_from_fuzzy`, no `recording_confidence`, bootstrap fuzzy collapsed to 0.65). Coverage 870/900 and 374/374 is **resolver-success**, not accuracy. `cached:false` does not mean the recording/links were new — `findOrCreateRecording` reused by ISRC/mbid/platform id.
 
 This document distinguishes **verified recording identity** (is this the right song?) from **destination-link coverage** (how many platforms got a URL). Coverage drops on the five identity 404s because those archive “successes” were false positives.

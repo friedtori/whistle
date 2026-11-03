@@ -489,7 +489,10 @@ describe("Apple destination URL/album version leaks", () => {
 });
 
 describe("archive thicc + Midnight Sun", () => {
-  it("archive thicc: title=thicc + remix album vs acapella 404, remix accept, both → remix", async () => {
+  // Reconciled with main@c26f802: a version-bearing candidate title must agree
+  // with the query title after version normalization, so a bare "thicc" query no
+  // longer auto-accepts the named remix even when the album names it.
+  it("archive thicc: title=thicc + remix album → 404 for acapella, remix, and both", async () => {
     expectInputKey("shygirl\tthicc\tthicc (fedde le grand remix)\t223000");
     const duration_ms = 223_000;
     const query = {
@@ -523,23 +526,35 @@ describe("archive thicc + Midnight Sun", () => {
       }),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
-    const accepted = await resolveTrack(query, {
-      db: memoryStore(),
-      providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [remix] }) }),
-    });
-    expect(accepted.recording.title).toBe("thicc (Fedde Le Grand remix)");
-    expect(accepted.links.find((link) => link.platform === "deezer")?.url).toBe(remix.url);
+    await expect(
+      resolveTrack(query, {
+        db: memoryStore(),
+        providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [remix] }) }),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
-    const both = await resolveTrack(query, {
-      db: memoryStore(),
-      providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella, remix] }) }),
-    });
-    expect(both.recording.title).toBe("thicc (Fedde Le Grand remix)");
-    expect(both.links.find((link) => link.platform === "deezer")?.url).toBe(remix.url);
-    expect(both.links.find((link) => link.platform === "deezer")?.url).not.toBe(acapella.url);
+    await expect(
+      resolveTrack(query, {
+        db: memoryStore(),
+        providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella, remix] }) }),
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+
+    // The full remix title still resolves to the remix.
+    const exact = await resolveTrack(
+      { ...query, title: "thicc (Fedde Le Grand remix)" },
+      {
+        db: memoryStore(),
+        providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella, remix] }) }),
+      },
+    );
+    expect(exact.links.find((link) => link.platform === "deezer")?.url).toBe(remix.url);
   });
 
-  it("Midnight Sun vs only Super Loud is version-review (paren-stripped identity may accept)", async () => {
+  // Reconciled with main@c26f802: parentheses are kept in fuzzy title similarity
+  // ("midnight sun" vs "midnight sun super loud" = 0.5 < 0.8), so the Super Loud-only
+  // case takes the "conservative" branch the original comment allowed for.
+  it("Midnight Sun vs only Super Loud → 404; bare title preferred when both exist", async () => {
     // Version-review: Super Loud is not a known version family. Current acceptable
     // behavior is either accept Super Loud (paren-stripped identity) OR unmatched
     // if a conservative paren guard is added later. Prefer bare “Midnight Sun”
@@ -565,15 +580,15 @@ describe("archive thicc + Midnight Sun", () => {
       url: "https://www.deezer.com/track/midnight-sun",
     });
 
-    const onlyLoud = await resolveTrack(
-      { artist: "Zara Larsson", title: "Midnight Sun", album: "Midnight Sun", duration_ms },
-      {
-        db: memoryStore(),
-        providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [superLoud] }) }),
-      },
-    );
-    expect(onlyLoud.recording.title).toMatch(/Midnight Sun/i);
-    expect(onlyLoud.links.find((link) => link.platform === "deezer")?.unmatched).toBe(false);
+    await expect(
+      resolveTrack(
+        { artist: "Zara Larsson", title: "Midnight Sun", album: "Midnight Sun", duration_ms },
+        {
+          db: memoryStore(),
+          providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [superLoud] }) }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
     const both = await resolveTrack(
       { artist: "Zara Larsson", title: "Midnight Sun", album: "Midnight Sun", duration_ms },
@@ -588,7 +603,10 @@ describe("archive thicc + Midnight Sun", () => {
 });
 
 describe("positive identity controls", () => {
-  it("Sneaker Pimps / Becoming Remixed / 543000 picks Armand's Dark Garage Mix over a short original", async () => {
+  // Reconciled with main@c26f802: main removed the substring-title bonus, so a bare
+  // "Spin Spin Sugar" query no longer accepts the named mix (title sim 2/7). This
+  // positive control from PR #5 flips to 404; the exact mix title still resolves.
+  it("Sneaker Pimps / Becoming Remixed / 543000: bare title 404s, exact mix title resolves", async () => {
     const original = hit("deezer", {
       id: "spin-orig",
       title: "Spin Spin Sugar",
@@ -607,8 +625,22 @@ describe("positive identity controls", () => {
       isrc: null,
       url: "https://www.deezer.com/track/spin-armand",
     });
+    await expect(
+      resolveTrack(
+        { artist: "Sneaker Pimps", title: "Spin Spin Sugar", album: "Becoming Remixed", duration_ms: 543_000 },
+        {
+          db: memoryStore(),
+          providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [original, mix] }) }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
     const result = await resolveTrack(
-      { artist: "Sneaker Pimps", title: "Spin Spin Sugar", album: "Becoming Remixed", duration_ms: 543_000 },
+      {
+        artist: "Sneaker Pimps",
+        title: "Spin Spin Sugar (Armand's Dark Garage Mix)",
+        album: "Becoming Remixed",
+        duration_ms: 543_000,
+      },
       {
         db: memoryStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [original, mix] }) }),
@@ -640,7 +672,11 @@ describe("positive identity controls", () => {
     expect(result.recording.title).toBe(title);
   });
 
-  it("featured-artist overlap accepts Ariana Grande vs feat. Iggy Azalea", async () => {
+  // Reconciled with main@c26f802: primary credits are compared with a 0.8 token
+  // threshold, so a query artist string that embeds "feat. Iggy Azalea" is rejected
+  // (main documents this: joint credits "may be rejected"). The bare primary artist
+  // still matches a candidate whose first credit is that artist.
+  it("primary-artist gate: bare primary artist accepts; 'A feat. B' query string 404s", async () => {
     const row = hit("deezer", {
       id: "problem",
       title: "Problem",
@@ -649,8 +685,17 @@ describe("positive identity controls", () => {
       isrc: null,
       url: "https://www.deezer.com/track/problem",
     });
+    await expect(
+      resolveTrack(
+        { artist: "Ariana Grande feat. Iggy Azalea", title: "Problem", duration_ms: 200_000 },
+        {
+          db: memoryStore(),
+          providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
     const result = await resolveTrack(
-      { artist: "Ariana Grande feat. Iggy Azalea", title: "Problem", duration_ms: 200_000 },
+      { artist: "Ariana Grande", title: "Problem", duration_ms: 200_000 },
       {
         db: memoryStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
@@ -662,7 +707,10 @@ describe("positive identity controls", () => {
     );
   });
 
-  it("transliteration hatch (気分上々 vs Kibun Jou Jou + same artist + duration) does not 404", async () => {
+  // Reconciled with main@c26f802: fuzzy acceptance does not implement cross-script
+  // transliteration (main README). The hatch survives only in the destination
+  // contradiction check for identifier-backed hops (see destinationMatchesRecording).
+  it("transliteration (気分上々 vs Kibun Jou Jou + same artist + duration) is a fuzzy 404", async () => {
     const row = hit("deezer", {
       id: "kibun",
       title: "Kibun Jou Jou",
@@ -671,14 +719,15 @@ describe("positive identity controls", () => {
       isrc: null,
       url: "https://www.deezer.com/track/kibun",
     });
-    const result = await resolveTrack(
-      { artist: "mihimaru GT", title: "気分上々↑↑", duration_ms: 255_000 },
-      {
-        db: memoryStore(),
-        providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
-      },
-    );
-    expect(result.recording.title).toBe("Kibun Jou Jou");
+    await expect(
+      resolveTrack(
+        { artist: "mihimaru GT", title: "気分上々↑↑", duration_ms: 255_000 },
+        {
+          db: memoryStore(),
+          providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
+        },
+      ),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 });
 

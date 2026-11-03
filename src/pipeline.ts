@@ -1,5 +1,5 @@
 import type { RecordingRow, Store } from "./db.ts";
-import { artistOverlaps, destinationMatchesRecording, pickFuzzyMatch } from "./fuzzy.ts";
+import { destinationMatchesRecording, pickFuzzyMatch } from "./fuzzy.ts";
 import { HttpError, canonicalUrl, parseInput } from "./ids.ts";
 import type {
   DestinationEvidence,
@@ -267,8 +267,7 @@ async function bootstrapFromSearch(
         acceptHits: (candidates) =>
           pickFuzzyMatch(probe, candidates) !== null,
       });
-      const withArtist = hits.filter((hit) => artistOverlaps(artist, hit.artists));
-      const picked = pickFuzzyMatch(probe, withArtist);
+      const picked = pickFuzzyMatch(probe, hits);
       if (picked) return picked;
     } catch (err) {
       warn(platform, "search", err);
@@ -347,9 +346,9 @@ async function runMbStage(
         artists: source.artists,
         duration_ms: source.duration_ms,
         acceptHits: (candidates) =>
-          pickFuzzyMatch(mbProbe, filterByArtist(source.artists, candidates)) !== null,
+          pickFuzzyMatch(mbProbe, candidates) !== null,
       });
-      const picked = pickFuzzyMatch(mbProbe, filterByArtist(source.artists, hits));
+      const picked = pickFuzzyMatch(mbProbe, hits);
       if (picked && acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence)) {
         isrcs.add(collectIsrcs(picked.hit), "fuzzy");
         mbid = picked.hit.mbid ?? picked.hit.id;
@@ -419,7 +418,6 @@ async function runFuzzyStage(deps: Session, recordingId: string, source: TrackHi
   const artists = recording.artists.length ? recording.artists : source.artists;
   const probe = {
     title: recording.title || source.title,
-    artists: recording.artists.length ? recording.artists : source.artists,
     duration_ms: recording.duration_ms ?? source.duration_ms,
     album: source.album,
     artists,
@@ -434,9 +432,9 @@ async function runFuzzyStage(deps: Session, recordingId: string, source: TrackHi
         artists,
         duration_ms: probe.duration_ms,
         acceptHits: (candidates) =>
-          pickFuzzyMatch(probe, filterByArtist(artists, candidates)) !== null,
+          pickFuzzyMatch(probe, candidates) !== null,
       });
-      const picked = pickFuzzyMatch(probe, filterByArtist(artists, hits));
+      const picked = pickFuzzyMatch(probe, hits);
       if (picked) {
         acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence);
       } else {
@@ -475,7 +473,6 @@ async function runSpotifyLast(
     const artists = recording.artists.length ? recording.artists : source.artists;
     const probe = {
       title: recording.title || source.title,
-      artists: recording.artists.length ? recording.artists : source.artists,
       duration_ms: recording.duration_ms ?? source.duration_ms,
       album: source.album,
       artists,
@@ -485,9 +482,9 @@ async function runSpotifyLast(
       artists,
       duration_ms: probe.duration_ms,
       acceptHits: (candidates) =>
-        pickFuzzyMatch(probe, filterByArtist(artists, candidates)) !== null,
+        pickFuzzyMatch(probe, candidates) !== null,
     });
-    const picked = pickFuzzyMatch(probe, filterByArtist(artists, hits));
+    const picked = pickFuzzyMatch(probe, hits);
     if (picked) {
       acceptDestinationHit(deps, recordingId, picked.hit, "fuzzy", picked.confidence);
     } else {
@@ -616,11 +613,6 @@ function noteContradictoryHits(
   }
 }
 
-function filterByArtist(artists: string[] | string, hits: TrackHit[]): TrackHit[] {
-  const query = Array.isArray(artists) ? artists.join(" ") : artists;
-  if (!query.trim()) return hits;
-  return hits.filter((hit) => hit.artists.length === 0 || artistOverlaps(query, hit.artists));
-}
 
 function noteDestination(
   session: Session,

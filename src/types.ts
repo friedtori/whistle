@@ -134,7 +134,7 @@ export type ProviderMap = {
   ytm: Provider;
 };
 
-export const MATCHING_RULE_VERSION = "2026-10-07.identity-destination.2";
+export const MATCHING_RULE_VERSION = "2026-11-03.identity-destination.3";
 
 export type ReuseVia = "input_cache" | "isrc" | "mbid" | "platform_id" | null;
 

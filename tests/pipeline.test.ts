@@ -757,8 +757,8 @@ describe("resolution pipeline", () => {
 
   it("exposes recording_confidence from the fuzzy selection and does not raise it on ISRC hops", async () => {
     const expected = evaluateFuzzy(
-      { title: "Blinding Lights", duration_ms: BLINDING_LIGHTS.duration_ms },
-      { title: "Blinding Lights", duration_ms: BLINDING_LIGHTS.duration_ms },
+      { title: "Blinding Lights", artists: ["The Weeknd"], duration_ms: BLINDING_LIGHTS.duration_ms },
+      { title: "Blinding Lights", artists: ["The Weeknd"], duration_ms: BLINDING_LIGHTS.duration_ms },
     ).confidence;
     expect(expected).not.toBe(0.65);
 

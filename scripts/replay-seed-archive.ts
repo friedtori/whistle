@@ -18,9 +18,9 @@ import {
   destinationMatchesRecording,
   destinationVersionText,
   evaluateFuzzy,
-  isTransliterationPair,
   titleSimilarity,
-  TITLE_SIMILARITY_FLOOR,
+  TITLE_MATCH_THRESHOLD,
+  versionFamiliesConflict,
   versionKeywordsConflict,
 } from "../src/fuzzy.ts";
 import { MATCHING_RULE_VERSION } from "../src/types.ts";
@@ -142,7 +142,7 @@ function gitCommit(): string | undefined {
 }
 
 function intendedFuzzy(row: ArchiveFuzzy): {
-  intended: "accept" | "reject" | "version-review";
+  intended: "accept" | "reject";
   title_similarity: number;
   title_floor: boolean;
   version_conflict: boolean;
@@ -162,19 +162,9 @@ function intendedFuzzy(row: ArchiveFuzzy): {
       })
     : { accepted: false, confidence: 0, reason: "missing_archive_title" };
   const version = candidateTitle ? versionKeywordsConflict(row.track, candidateTitle) : false;
-  const midnight = row.key === "zara larsson\tmidnight sun\tmidnight sun\t190000";
-  if (midnight) {
-    return {
-      intended: "version-review",
-      title_similarity: sim,
-      title_floor: sim >= TITLE_SIMILARITY_FLOOR,
-      version_conflict: version,
-      reason: "Super Loud is not a known version family; accept-only-hit or prefer bare title",
-    };
-  }
-  const floorPassed =
-    sim >= TITLE_SIMILARITY_FLOOR ||
-    (Boolean(candidateTitle) && isTransliterationPair(row.track, candidateTitle));
+  // Fuzzy acceptance has no transliteration hatch (main@c26f802), so the
+  // title gate is the plain fuzzy threshold.
+  const floorPassed = sim >= TITLE_MATCH_THRESHOLD;
   if (!decision.accepted) {
     return {
       intended: "reject",
@@ -220,7 +210,7 @@ function appleDestEval(
     archive_accepted: Boolean(apple),
     archive_url: apple?.url ?? null,
     version_scan: scan,
-    version_conflict: versionKeywordsConflict(recording.title, scan),
+    version_conflict: versionFamiliesConflict(recording.title, scan),
     destination_matches: destinationMatchesRecording(recording, hit),
     intended: "unmatched" as const,
     reason: "destination_mismatch",
