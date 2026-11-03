@@ -314,7 +314,14 @@ async function runMbStage(
 
   let recording = deps.db.findRecordingById(recordingId)!;
   let mbid = recording.mbid;
-  let mbOrigin: IsrcOrigin | null = mbid ? "trusted" : null;
+  // An mbid attached earlier in this resolve by a fuzzy or isrc_from_fuzzy MB
+  // hop keeps that provenance; otherwise its sibling ISRCs would be laundered
+  // into trusted ISRCs and surface as `method: "isrc"` at 0.98.
+  const mbLink = deps.db
+    .listLinks(recordingId)
+    .find((link) => link.platform === "musicbrainz" && !link.unmatched);
+  const mbLinkFuzzy = mbLink?.method === "fuzzy" || mbLink?.method === "isrc_from_fuzzy";
+  let mbOrigin: IsrcOrigin | null = mbid ? (mbLinkFuzzy ? "fuzzy" : "trusted") : null;
 
   if (!mbid) {
     for (const isrc of isrcs.trusted()) {
