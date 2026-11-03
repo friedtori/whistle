@@ -20,12 +20,22 @@ export interface Config {
   /** Minimum spacing between MusicBrainz requests, enforced globally by the gate. */
   musicbrainzMinIntervalMs: number;
   gitCommit?: string;
+  /** Anonymous resolves (batch inputs count individually) per client network per hour. */
+  anonResolvesPerHour: number;
+  /** Resolves per verified Gum session per UTC day. */
+  verifiedResolvesPerDay: number;
+  /** Raw 32-byte Ed25519 public key of the Gum licence Worker, base64. */
+  gumLicensePublicKey?: string;
+  /** HMAC key for session cookies (secret). Verification cannot complete without it. */
+  sessionSecret?: string;
 }
 
 export const DEFAULT_SUBREQUEST_LIMIT = 1000;
 export const DEFAULT_RESOLVE_SUBREQUEST_CAP = 40;
 export const DEFAULT_BATCH_MAX_INPUTS = 20;
 export const DEFAULT_MUSICBRAINZ_MIN_INTERVAL_MS = 1100;
+export const DEFAULT_ANON_RESOLVES_PER_HOUR = 60;
+export const DEFAULT_VERIFIED_RESOLVES_PER_DAY = 2000;
 
 /** A string-valued binding map: Worker `env`, or `process.env` in Node scripts. */
 export type ConfigSource = Record<string, unknown>;
@@ -68,6 +78,10 @@ export function loadConfig(env: ConfigSource): Config {
       0,
     ),
     gitCommit: str(env, "WHISTLE_GIT_COMMIT") ?? str(env, "GIT_COMMIT"),
+    anonResolvesPerHour: int(env, "ANON_RESOLVES_PER_HOUR", DEFAULT_ANON_RESOLVES_PER_HOUR, 0),
+    verifiedResolvesPerDay: int(env, "VERIFIED_RESOLVES_PER_DAY", DEFAULT_VERIFIED_RESOLVES_PER_DAY),
+    gumLicensePublicKey: str(env, "GUM_LICENSE_PUBLIC_KEY"),
+    sessionSecret: str(env, "SESSION_SECRET"),
   };
 }
 

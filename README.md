@@ -44,6 +44,7 @@ Set with `wrangler secret put <NAME>` in production and in `.dev.vars` locally. 
 | `TIDAL_CLIENT_ID` / `TIDAL_CLIENT_SECRET` | Tidal Open API v2 client-credentials |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Spotify is resolved **last** and never trusted alone |
 | `YOUTUBE_API_KEY` | YouTube Data API v3; YouTube Music is fuzzy-only |
+| `SESSION_SECRET` | **Required for verification.** HMAC key for the `__Host-whistle` session cookie (`openssl rand -base64 32`). Without it `/auth/session` answers 503 and over-quota Gum installs cannot verify. Rotating it ends every session |
 
 ## Vars (`wrangler.jsonc`)
 
@@ -57,6 +58,9 @@ Set with `wrangler secret put <NAME>` in production and in `.dev.vars` locally. 
 | `BATCH_MAX_INPUTS` | `20` | `POST /v1/resolve/batch` input cap (max 100) |
 | `MUSICBRAINZ_MIN_INTERVAL_MS` | `1100` | Spacing enforced by the MusicBrainz gate |
 | `WHISTLE_GIT_COMMIT` | unset | Reported as `evidence.commit` |
+| `ANON_RESOLVES_PER_HOUR` | `60` | Anonymous resolves per client network per clock hour before the 429 challenge. Batch inputs count individually |
+| `VERIFIED_RESOLVES_PER_DAY` | `2000` | Resolves per verified Gum session per UTC day |
+| `GUM_LICENSE_PUBLIC_KEY` | `pkYYXaSz0geqU0mG5eCqr8v9QPIJffVSxpyNpH9THnU=` | Gum licence Worker's raw Ed25519 public key (base64). Public, so a var |
 
 When MusicKit catalog auth is configured, Apple lookups use the catalog API only (iTunes Search/Lookup is not used as a fallback, which avoids dead `/song/{id}` links). Without catalog auth, Apple uses public iTunes **lookup** (`lookup?id=` / `lookup?isrc=`). There is **no** `search?term=${isrc}` first-result fallback — that path returned unrelated songs whose ISRC was not the query. Deezer and MusicBrainz need no keys.
 
@@ -85,9 +89,33 @@ Title normalization keeps Unicode letters and combining marks (NFKC, `\p{L}\p{M}
 | `POST` | `/v1/resolve/batch` | Up to 20 inputs (`BATCH_MAX_INPUTS`): `{ "inputs": [ { "isrc" }, { "platform", "id" }, { "url" }, { "artist", "title", "duration_ms", "album"? } ] }` |
 | `GET` | `/v1/recordings/{id}` | Cached recording + links |
 | `POST` | `/v1/corrections` | Flag a link: `{ "link_id", "reason": "wrong" }` or `{ "recording_id", "platform", "reason": "missing" }` |
+| `POST` | `/auth/session` | Gum verification proof → `204` + session cookie (see Verification) |
 | `GET` | `/health` | Liveness |
 
 v1 platforms: `apple`, `deezer`, `tidal`, `musicbrainz`, `spotify`, `ytm`.
+
+## Verification (Gum heavy-use handshake)
+
+Normal requests are anonymous. The resolve endpoints (`GET /v1/resolve`, `POST /v1/resolve/batch`) are metered:
+
+- **Anonymous** callers are counted per client network: the `CF-Connecting-IP` address, IPv6 grouped by /64, stored only as a hash. The window is a fixed clock hour and the limit is `ANON_RESOLVES_PER_HOUR`. Past it, the response is:
+
+  ```
+  HTTP/1.1 429
+  { "error": { "code": "verification_required" },
+    "verification": { "nonce": "whistle.<32 chars>", "expires_at": 1793448300000, "endpoint": "/auth/session" } }
+  ```
+
+  The nonce is single use, valid for 5 minutes (`expires_at` is ms since epoch), and stored in D1 (`verification_nonces`).
+- **Proof.** Gum takes the nonce to its licence Worker and `POST`s the returned envelope unchanged to `/auth/session`: `{ "payload": { "status", "days_remaining", "days_allowed", "server_time", "nonce", "activation_id"?, "device_limit"? }, "sig" }`. `sig` is base64 Ed25519 over the canonical JSON of `payload` (keys sorted, null/undefined omitted, no whitespace), checked with WebCrypto against `GUM_LICENSE_PUBLIC_KEY`. Whistle accepts only when **all** of these hold:
+  - the signature verifies;
+  - `status` is `trial` or `licensed` (`expired`, `revoked`, `seat_limit` and anything else are rejected);
+  - `server_time` is within ±10 minutes of now (integer seconds or milliseconds);
+  - the nonce was issued by Whistle, is unexpired and unused. It is marked used atomically.
+
+  On success the response is **`204`** with `Set-Cookie: __Host-whistle=<opaque>; Secure; HttpOnly; Path=/; SameSite=Strict; Max-Age=604800` (no `Domain`). A bad proof is `403`, a malformed body is `400`, and a missing `SESSION_SECRET` is `503`. The Gum client treats every non-204 as failed. The licence Worker separately rejects a nonce replay for 24 h, so a Whistle nonce can only ever be proven once.
+- **Session.** The cookie value is `<session id>.<expiry ms>.<HMAC-SHA256>` under `SESSION_SECRET`. It lasts 7 days and is validated without a D1 read. A request with a valid cookie skips the anonymous quota and is counted against `VERIFIED_RESOLVES_PER_DAY` for that session (UTC day). It **never** receives `verification_required` while the session is valid. Past the daily quota it gets `429 { "error": { "code": "rate_limited" } }` with `Retry-After`. An invalid or expired cookie is treated as anonymous.
+- Every route answers at its exact path at the root: no `/api` prefix, no trailing-slash redirect. An unknown path is a JSON 404.
 
 ### Pipeline
 
@@ -109,7 +137,7 @@ Fuzzy matching is conservative: reordered or differently formatted joint artist 
 
 Repeat lookups of the same input are served from the D1 cache.
 
-Whistle itself does not rate-limit callers yet; rely on zone rate-limit rules in front of the custom domain. MusicBrainz is kept at ≤1 req/s globally by the `MusicBrainzGate` Durable Object. Review each provider ToS before commercial use.
+Resolve endpoints are metered per client and per verified Gum session (see Verification); keep a coarse zone rate-limit rule in front of the custom domain as well. MusicBrainz is kept at ≤1 req/s globally by the `MusicBrainzGate` Durable Object. Review each provider ToS before commercial use.
 
 ## Entities
 

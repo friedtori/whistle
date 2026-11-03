@@ -38,7 +38,15 @@
     // Upper bound on provider calls (fetch + MusicBrainz gate) for one resolve.
     "RESOLVE_SUBREQUEST_CAP": "40",
     // POST /v1/resolve/batch input cap. 20 x (40 + D1) stays under 1000.
-    "BATCH_MAX_INPUTS": "20"
+    "BATCH_MAX_INPUTS": "20",
+    // Gum verification handshake (README "Verification"). Policy knobs:
+    // anonymous resolves per client network per hour before a 429 challenge,
+    // and resolves per verified Gum session per UTC day.
+    "ANON_RESOLVES_PER_HOUR": "60",
+    "VERIFIED_RESOLVES_PER_DAY": "2000",
+    // Public key of the Gum licence Worker (raw Ed25519, base64). Not a secret.
+    // SESSION_SECRET (cookie HMAC key) is a Wrangler secret.
+    "GUM_LICENSE_PUBLIC_KEY": "pkYYXaSz0geqU0mG5eCqr8v9QPIJffVSxpyNpH9THnU="
   },
 
   "observability": { "enabled": true }

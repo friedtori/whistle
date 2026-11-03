@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { createApp } from "../src/app.ts";
+import { AuthStore } from "../src/auth-store.ts";
 import {
   DEFAULT_BATCH_MAX_INPUTS,
   DEFAULT_RESOLVE_SUBREQUEST_CAP,
@@ -118,7 +119,14 @@ export function mockProviders(overrides: Partial<ProviderMap> = {}): ProviderMap
  */
 export async function freshStore(): Promise<D1Store> {
   await env.DB.batch(
-    ["corrections", "platform_links", "identifiers", "recordings"].map((table) =>
+    [
+      "corrections",
+      "platform_links",
+      "identifiers",
+      "recordings",
+      "verification_nonces",
+      "quota_counters",
+    ].map((table) =>
       env.DB.prepare(`DELETE FROM ${table}`),
     ),
   );
@@ -131,6 +139,14 @@ export interface TestServicesOptions {
   batchMaxInputs?: number;
   /** Build providers from the per-resolve budget (defaults to the fixed `providers`). */
   providersFor?: (budget: SubrequestBudget) => ProviderMap;
+  /** Enable the verification handshake and quotas. */
+  verification?: {
+    anonResolvesPerHour?: number;
+    verifiedResolvesPerDay?: number;
+    gumLicensePublicKey?: string;
+    sessionSecret?: string;
+  };
+  now?: () => number;
 }
 
 /** Hono app over the test D1 store with stub providers. */
@@ -146,6 +162,18 @@ export function testApp(db: D1Store, providers: ProviderMap, options: TestServic
       budget,
       db: new D1Store(db.db, budget),
       providers: options.providersFor ?? (() => providers),
+      now: options.now,
+      verification: options.verification
+        ? {
+            store: new AuthStore(db.db, budget),
+            config: {
+              anonResolvesPerHour: options.verification.anonResolvesPerHour ?? 60,
+              verifiedResolvesPerDay: options.verification.verifiedResolvesPerDay ?? 2000,
+              gumLicensePublicKey: options.verification.gumLicensePublicKey,
+              sessionSecret: options.verification.sessionSecret,
+            },
+          }
+        : undefined,
     };
   });
 }

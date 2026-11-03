@@ -1,4 +1,5 @@
 import { createApp, type RequestServices } from "./app.ts";
+import { AuthStore } from "./auth-store.ts";
 import { loadConfig } from "./config.ts";
 import { D1Store } from "./db.ts";
 import type { Env } from "./env.ts";
@@ -15,6 +16,7 @@ export function servicesFromEnv(env: Env): RequestServices {
     config,
     budget,
     db: new D1Store(env.DB, budget),
+    verification: { store: new AuthStore(env.DB, budget), config },
     providers: (spend) =>
       createProviders(config, {
         http: createHttpJson(spend),

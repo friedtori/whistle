@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
+import type { AuthStore } from "./auth-store.ts";
 import type { Config } from "./config.ts";
 import type { D1Store } from "./db.ts";
 import { HttpError, normalizePlatform } from "./ids.ts";
@@ -8,6 +9,17 @@ import type { SubrequestBudget } from "./http.ts";
 import { present, resolveTrack } from "./pipeline.ts";
 import type { Platform, ProviderMap, ResolveQuery } from "./types.ts";
 import { PLATFORMS } from "./types.ts";
+import {
+  anonymousClientKey,
+  checkProof,
+  importLicencePublicKey,
+  issueSessionToken,
+  parseEnvelope,
+  readCookie,
+  readSessionToken,
+  SESSION_COOKIE,
+  sessionCookieHeader,
+} from "./verification.ts";
 
 /**
  * D1 round trips one resolve may need on top of its provider calls (input
@@ -22,7 +34,22 @@ export interface RequestServices {
   db: D1Store;
   /** Providers whose outbound calls spend from `budget`. */
   providers(budget: SubrequestBudget): ProviderMap;
+  /** Gum verification handshake and quotas. Omitted only in tests that exercise resolving alone. */
+  verification?: VerificationServices;
+  /** Clock (ms). Injectable for tests. */
+  now?: () => number;
 }
+
+export interface VerificationServices {
+  store: AuthStore;
+  config: Pick<
+    Config,
+    "anonResolvesPerHour" | "verifiedResolvesPerDay" | "gumLicensePublicKey" | "sessionSecret"
+  >;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 /** `env` is the Worker bindings object. */
 export type ServicesFactory = (env: Record<string, unknown>) => RequestServices;
@@ -86,6 +113,8 @@ export function createApp(services: ServicesFactory): Hono<AppEnv> {
 
   app.get("/v1/resolve", async (c) => {
     const svc = c.get("services");
+    const refused = await meter(c, 1);
+    if (refused) return refused;
     const query = resolveQueryFromRequest(c);
     const result = await resolveTrack(query, resolveDeps(svc, svc.budget));
     return c.json(result);
@@ -100,6 +129,8 @@ export function createApp(services: ServicesFactory): Hono<AppEnv> {
       if (!parsed.success) {
         throw new HttpError(400, "bad_request", parsed.error.issues[0]?.message ?? "Invalid batch");
       }
+      const refused = await meter(c, parsed.data.inputs.length);
+      if (refused) return refused;
       const perResolve = svc.config.resolveSubrequestCap + D1_CALLS_PER_RESOLVE;
       const results = [];
       for (const input of parsed.data.inputs) {
@@ -130,6 +161,34 @@ export function createApp(services: ServicesFactory): Hono<AppEnv> {
         }
       }
       return c.json({ results });
+    },
+  );
+
+  app.post(
+    "/auth/session",
+    bodyLimit({ maxSize: 16 * 1024, onError: (c) => tooLarge(c) }),
+    async (c) => {
+      const svc = c.get("services");
+      const v = svc.verification;
+      if (!v?.config.sessionSecret || !v.config.gumLicensePublicKey) {
+        console.error("[whistle] /auth/session: SESSION_SECRET or GUM_LICENSE_PUBLIC_KEY is not configured");
+        return c.json({ error: { code: "verification_unavailable" } }, 503);
+      }
+      const envelope = parseEnvelope(await jsonBody(c));
+      if (!envelope) return c.json({ error: { code: "bad_request" } }, 400);
+      const now = clock(svc);
+      const check = await checkProof(envelope, {
+        publicKey: await licenceKey(v.config.gumLicensePublicKey),
+        now,
+      });
+      if (!check.ok) {
+        return c.json({ error: { code: "verification_failed", reason: check.reason } }, 403);
+      }
+      if (!(await v.store.consumeNonce(check.nonce, now))) {
+        return c.json({ error: { code: "verification_failed", reason: "nonce_not_valid" } }, 403);
+      }
+      const { token } = await issueSessionToken(v.config.sessionSecret, now);
+      return c.body(null, 204, { "Set-Cookie": sessionCookieHeader(token) });
     },
   );
 
@@ -190,6 +249,64 @@ export function createApp(services: ServicesFactory): Hono<AppEnv> {
   });
 
   return app;
+}
+
+function clock(svc: RequestServices): number {
+  return svc.now ? svc.now() : Date.now();
+}
+
+const licenceKeys = new Map<string, Promise<CryptoKey>>();
+
+function licenceKey(base64: string): Promise<CryptoKey> {
+  let key = licenceKeys.get(base64);
+  if (!key) {
+    key = importLicencePublicKey(base64);
+    key.catch(() => licenceKeys.delete(base64));
+    licenceKeys.set(base64, key);
+  }
+  return key;
+}
+
+/**
+ * Quota gate for resolve endpoints. A request carrying a valid session cookie
+ * is counted against that session's daily quota and is never challenged; past
+ * that quota it gets `rate_limited`, not `verification_required`. Anything
+ * else is anonymous and counted per client network per hour; past that quota
+ * the response is the 429 challenge with a fresh single-use nonce.
+ */
+async function meter(c: Context<AppEnv>, units: number): Promise<Response | null> {
+  const svc = c.get("services");
+  const v = svc.verification;
+  if (!v) return null;
+  const now = clock(svc);
+
+  const token = readCookie(c.req.header("Cookie"), SESSION_COOKIE);
+  const session =
+    token && v.config.sessionSecret ? await readSessionToken(v.config.sessionSecret, token, now) : null;
+  if (session) {
+    const day = Math.floor(now / DAY_MS) * DAY_MS;
+    const used = await v.store.increment(`session:${session.id}`, day, units);
+    if (used <= v.config.verifiedResolvesPerDay) return null;
+    const retryAfter = Math.ceil((day + DAY_MS - now) / 1000);
+    return c.json(
+      { error: { code: "rate_limited", message: "Daily quota for this session is used up" } },
+      429,
+      { "Retry-After": String(retryAfter) },
+    );
+  }
+
+  const hour = Math.floor(now / HOUR_MS) * HOUR_MS;
+  const client = await anonymousClientKey(c.req.header("CF-Connecting-IP"));
+  const used = await v.store.increment(client, hour, units);
+  if (used <= v.config.anonResolvesPerHour) return null;
+  const { nonce, expiresAt } = await v.store.issueNonce(now);
+  return c.json(
+    {
+      error: { code: "verification_required" },
+      verification: { nonce, expires_at: expiresAt, endpoint: "/auth/session" },
+    },
+    429,
+  );
 }
 
 function resolveDeps(svc: RequestServices, budget: SubrequestBudget) {
