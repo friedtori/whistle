@@ -4,7 +4,7 @@ import { resolveTrack } from "../src/pipeline.ts";
 import {
   BLINDING_LIGHTS,
   hit,
-  memoryStore,
+  freshStore,
   mockProviders,
   stubMb,
   stubProvider,
@@ -12,7 +12,7 @@ import {
 
 describe("resolution pipeline", () => {
   it("rejects wrong-artist destinations in every fuzzy stage, including MusicBrainz and Spotify", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const wrong = { artists: ["Tribute Band"], isrc: "USWRG0000001" };
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
@@ -24,19 +24,15 @@ describe("resolution pipeline", () => {
       spotify: stubProvider("spotify", { searchHits: [hit("spotify", wrong)] }),
       musicbrainz: stubMb({ searchHits: [hit("musicbrainz", wrong)] }),
     });
-    try {
-      const result = await resolveTrack(
-        { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
-      );
-      expect(result.links.filter((link) => !link.unmatched).map((link) => link.platform)).toEqual(["deezer"]);
-      expect(result.identifiers.some((id) => id.kind === "isrc")).toBe(false);
-    } finally {
-      db.close();
-    }
+    const result = await resolveTrack(
+      { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
+    );
+    expect(result.links.filter((link) => !link.unmatched).map((link) => link.platform)).toEqual(["deezer"]);
+    expect(result.identifiers.some((id) => id.kind === "isrc")).toBe(false);
   });
 
   it("retries search when the strict results contain only a wrong performer", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const { searchWithPlainFallback } = await import("../src/providers/search.ts");
     const calls: string[] = [];
     const providers = mockProviders({
@@ -53,38 +49,30 @@ describe("resolution pipeline", () => {
         },
       },
     });
-    try {
-      const result = await resolveTrack(
-        { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
-      );
-      expect(calls).toEqual(["strict", "The Weeknd Blinding Lights"]);
-      expect(result.links.find((link) => link.platform === "apple")).toMatchObject({ unmatched: false, method: "fuzzy" });
-    } finally {
-      db.close();
-    }
+    const result = await resolveTrack(
+      { platform: "deezer", id: BLINDING_LIGHTS.ids.deezer }, { db, providers },
+    );
+    expect(calls).toEqual(["strict", "The Weeknd Blinding Lights"]);
+    expect(result.links.find((link) => link.platform === "apple")).toMatchObject({ unmatched: false, method: "fuzzy" });
   });
 
   it("bootstraps non-Latin metadata and rejects unrelated equal-duration titles", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", { searchHits: [
         hit("deezer", { title: "別の曲", artists: ["宇多田ヒカル"], isrc: null }),
         hit("deezer", { id: "123", title: "光", artists: ["宇多田ヒカル"], isrc: null }),
       ] }),
     });
-    try {
-      const result = await resolveTrack(
-        { artist: "宇多田ヒカル", title: "光", duration_ms: BLINDING_LIGHTS.duration_ms }, { db, providers },
-      );
-      expect(result.recording.title).toBe("光");
-      expect(result.identifiers).toContainEqual({ kind: "deezer", value: "123" });
-    } finally {
-      db.close();
-    }
+    const result = await resolveTrack(
+      { artist: "宇多田ヒカル", title: "光", duration_ms: BLINDING_LIGHTS.duration_ms }, { db, providers },
+    );
+    expect(result.recording.title).toBe("光");
+    expect(result.identifiers).toContainEqual({ kind: "deezer", value: "123" });
   });
 
   it("resolves by ISRC and returns confidence + method for each v1 platform", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
@@ -132,7 +120,7 @@ describe("resolution pipeline", () => {
   });
 
   it("scores a direct platform-id source at 1 and ISRC-only sources at 0.98", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer") },
@@ -155,7 +143,7 @@ describe("resolution pipeline", () => {
 
     const tidalOnly = await resolveTrack(
       { isrc: BLINDING_LIGHTS.isrc },
-      { db: memoryStore(), providers },
+      { db: await freshStore(), providers },
     );
     expect(tidalOnly.links.find((l) => l.platform === "tidal")).toMatchObject({
       method: "isrc",
@@ -194,7 +182,7 @@ describe("resolution pipeline", () => {
 
     const result = await resolveTrack(
       { url: "https://www.deezer.com/track/916424" },
-      { db: memoryStore(), providers },
+      { db: await freshStore(), providers },
     );
 
     const apple = result.links.find((l) => l.platform === "apple")!;
@@ -211,7 +199,7 @@ describe("resolution pipeline", () => {
   it("retries sibling ISRCs from MusicBrainz before fuzzy when the primary misses", async () => {
     const primary = "USPRI0000001";
     const sibling = "USSIB0000002";
-    const db = memoryStore();
+    const db = await freshStore();
     let deezerSearchCalls = 0;
     const siblingHit = hit("deezer", {
       id: "555",
@@ -256,7 +244,7 @@ describe("resolution pipeline", () => {
   });
 
   it("normalizes a Deezer URL to a recording and fills other platforms", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byId: { [BLINDING_LIGHTS.ids.deezer]: hit("deezer") },
@@ -279,7 +267,7 @@ describe("resolution pipeline", () => {
   });
 
   it("does not overwrite an ISRC match with a later fuzzy hit", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
@@ -298,7 +286,7 @@ describe("resolution pipeline", () => {
   });
 
   it("leaves a platform unmatched when fuzzy hits a conflicting live version", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
@@ -321,7 +309,7 @@ describe("resolution pipeline", () => {
   });
 
   it("returns a cache hit on repeat resolve of the same input", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     let isrcCalls = 0;
     const providers = mockProviders({
       deezer: {
@@ -343,7 +331,7 @@ describe("resolution pipeline", () => {
   });
 
   it("resolves by artist+title via Deezer search and marks the source link fuzzy", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [hit("deezer")],
@@ -381,7 +369,7 @@ describe("resolution pipeline", () => {
   });
 
   it("bootstraps artist+title+album onto the studio album, not a compilation", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const studio = hit("deezer", {
       id: "111",
       title: "Ironic",
@@ -425,7 +413,7 @@ describe("resolution pipeline", () => {
   });
 
   it("rejects artist+title bootstrap when only a remaster or wrong artist is found", async () => {
-    const db = memoryStore();
+    const db = await freshStore();
     const remasterProviders = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [
@@ -458,7 +446,7 @@ describe("resolution pipeline", () => {
 
   it("resolves Spotify last via title search and never uses it to seed earlier platforms", async () => {
     const order: string[] = [];
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         byIsrc: { [BLINDING_LIGHTS.isrc]: hit("deezer") },
@@ -501,7 +489,7 @@ describe("resolution pipeline", () => {
     await expect(
       resolveTrack(
         { artist: "Bloc Party", title: "Pigwig", duration_ms: 210_000 },
-        { db: memoryStore(), providers },
+        { db: await freshStore(), providers },
       ),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
@@ -511,7 +499,7 @@ describe("resolution pipeline", () => {
       resolveTrack(
         { artist: "Empress Of", title: "HandsOn", duration_ms: 200_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", {
               searchHits: [
@@ -538,7 +526,7 @@ describe("resolution pipeline", () => {
     const accepted = await resolveTrack(
       { artist: "Empress Of", title: "HandsOn", duration_ms: 200_000 },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", { searchHits: [handsOn] }),
         }),
@@ -557,7 +545,7 @@ describe("resolution pipeline", () => {
       resolveTrack(
         { artist: "Ricardo Villalobos", title: "Dexter", duration_ms: 549_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", {
               searchHits: [
@@ -602,7 +590,7 @@ describe("resolution pipeline", () => {
     const result = await resolveTrack(
       { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", {
             searchHits: [deezerHit],
@@ -660,7 +648,7 @@ describe("resolution pipeline", () => {
     const contradicted = await resolveTrack(
       { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", { searchHits: [deezerHit] }),
           apple: stubProvider("apple", { byId: { [wrongApple.id]: wrongApple } }),
@@ -687,7 +675,7 @@ describe("resolution pipeline", () => {
     const unread = await resolveTrack(
       { artist: "Lord Of The Isles", title: "Storm Mother", duration_ms },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", { searchHits: [deezerHit] }),
           apple: stubProvider("apple", { byId: {} }),
@@ -718,7 +706,7 @@ describe("resolution pipeline", () => {
       resolveTrack(
         { artist: "Shygirl", title: "thicc (Fedde Le Grand remix)", duration_ms },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", {
               searchHits: [
@@ -745,7 +733,7 @@ describe("resolution pipeline", () => {
     const accepted = await resolveTrack(
       { artist: "Shygirl", title: "thicc (Fedde Le Grand remix)", duration_ms },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", { searchHits: [remix] }),
         }),
@@ -765,7 +753,7 @@ describe("resolution pipeline", () => {
     const result = await resolveTrack(
       { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", {
             searchHits: [hit("deezer")],

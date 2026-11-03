@@ -3,34 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Hosted developer-first music track resolver",
+  "description": "Developer-first music track resolver (Cloudflare Worker)",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9"
   },
   "scripts": {
-    "dev": "NODE_OPTIONS=--experimental-sqlite tsx watch src/server.ts",
-    "start": "NODE_OPTIONS=--experimental-sqlite tsx src/server.ts",
-    "test": "NODE_OPTIONS=--experimental-sqlite vitest run",
-    "test:watch": "NODE_OPTIONS=--experimental-sqlite vitest",
-    "typecheck": "tsc --noEmit",
-    "dump:seed-cases": "NODE_OPTIONS=--experimental-sqlite tsx scripts/dump-seed-cases.ts",
-    "replay:seed-archive": "NODE_OPTIONS=--experimental-sqlite tsx scripts/replay-seed-archive.ts"
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "db:migrate:local": "wrangler d1 migrations apply whistle --local",
+    "dump:seed-cases": "node --env-file-if-exists=.dev.vars --experimental-sqlite --import tsx scripts/dump-seed-cases.ts",
+    "replay:seed-archive": "node --env-file-if-exists=.dev.vars --experimental-sqlite --import tsx scripts/replay-seed-archive.ts"
   },
   "dependencies": {
-    "dotenv": "^16.6.1",
-    "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.2",
+    "hono": "^4.13.16",
+    "jose": "^6.2.15",
     "nanoid": "^5.1.5",
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@types/express": "^5.0.3",
-    "@types/jsonwebtoken": "^9.0.10",
+    "@cloudflare/vitest-pool-workers": "0.23.0",
+    "@cloudflare/workers-types": "^5.20261020.1",
     "@types/node": "^24.6.2",
-    "@types/supertest": "^6.0.3",
-    "supertest": "^7.1.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "~4.1.12",
+    "wrangler": "^4.156.2"
   }
 }

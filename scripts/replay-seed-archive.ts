@@ -333,16 +333,16 @@ const payload = {
 
 if (!dry) {
   const { loadConfig } = await import("../src/config.ts");
-  const { Store } = await import("../src/db.ts");
+  const { createNodeStore } = await import("./lib/node-store.ts");
   const { resolveTrack } = await import("../src/pipeline.ts");
   const { createProviders } = await import("../src/providers/index.ts");
-  const providers = createProviders(loadConfig());
+  const providers = createProviders(loadConfig(process.env));
   payload.providers_enabled = Object.entries(providers)
     .filter(([, provider]) => provider.enabled)
     .map(([name]) => name);
   payload.credentials_skipped = Object.values(providers).filter((provider) => !provider.enabled).length;
   for (const item of payload.cases) {
-    const db = new Store(":memory:");
+    const db = createNodeStore();
     try {
       const result =
         item.kind === "fuzzy"

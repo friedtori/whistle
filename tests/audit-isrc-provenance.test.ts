@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveTrack } from "../src/pipeline.ts";
-import { BLINDING_LIGHTS, hit, memoryStore, mockProviders, stubMb, stubProvider } from "./helpers.ts";
+import { BLINDING_LIGHTS, hit, freshStore, mockProviders, stubMb, stubProvider } from "./helpers.ts";
 
 // Milestone A audit: an ISRC whose only provenance is a fuzzy match must never
 // surface as `method: "isrc"`, including via MusicBrainz sibling ISRCs.
@@ -18,7 +18,7 @@ describe("isrc_from_fuzzy provenance (audit)", () => {
     });
     const result = await resolveTrack(
       { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
-      { db: memoryStore(), providers },
+      { db: await freshStore(), providers },
     );
     const matched = result.links.filter((link) => !link.unmatched);
     expect(matched.map((link) => link.method)).not.toContain("isrc");

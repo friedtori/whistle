@@ -1,13 +1,11 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { evaluateFuzzy, titleSimilarity } from "../src/fuzzy.ts";
 import { resolveTrack } from "../src/pipeline.ts";
 import { MATCHING_RULE_VERSION } from "../src/types.ts";
-import { hit, memoryStore, mockProviders, stubProvider } from "./helpers.ts";
+import namedCases from "./fixtures/seed-archive/named-cases.json";
+import { hit, freshStore, mockProviders, stubProvider } from "./helpers.ts";
 
-const named = JSON.parse(
-  readFileSync(new URL("./fixtures/seed-archive/named-cases.json", import.meta.url), "utf8"),
-) as {
+const named = namedCases as unknown as {
   fuzzy_identity_conflicts: Array<{ input_key: string }>;
   version_review: Array<{ input_key: string }>;
   wild_storm_seed: { isrc: string };
@@ -77,7 +75,7 @@ describe("named archive identity cases", () => {
       resolveTrack(
         { artist: "This Is Lorelei", title: "Oh No Now My", album: "Oh No Now My", duration_ms: 188_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", { searchHits: [billyHit] }),
           }),
@@ -85,7 +83,7 @@ describe("named archive identity cases", () => {
       ),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [billyHit],
@@ -146,7 +144,7 @@ describe("named archive identity cases", () => {
           duration_ms: 167_000,
         },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", { searchHits: [wild] }),
           }),
@@ -154,7 +152,7 @@ describe("named archive identity cases", () => {
       ),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [wild],
@@ -208,7 +206,7 @@ describe("named archive identity cases", () => {
       isrc: WILD_STORM.isrc,
       url: "https://www.deezer.com/track/syw",
     });
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [syw],
@@ -259,7 +257,7 @@ describe("named archive identity cases", () => {
       isrc: WILD_STORM.isrc,
       url: WILD_STORM.appleUrl,
     });
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [wild],
@@ -304,7 +302,7 @@ describe("named archive identity cases", () => {
       duration_ms: NWCBF.duration_ms,
       url: NWCBF.tidalUrl,
     });
-    const db = memoryStore();
+    const db = await freshStore();
     const providers = mockProviders({
       deezer: stubProvider("deezer", {
         searchHits: [friends],
@@ -341,7 +339,7 @@ describe("named archive identity cases", () => {
       resolveTrack(
         { artist: "Ricardo Villalobos", title: "Dexter", album: "Dexter", duration_ms: 549_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", {
               searchHits: [
@@ -432,7 +430,7 @@ describe("Apple destination URL/album version leaks", () => {
       const result = await resolveTrack(
         { isrc: row.isrc },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({
             deezer: stubProvider("deezer", { byIsrc: { [row.isrc]: deezerHit } }),
             apple: stubProvider("apple", { searchHits: [appleHit] }),
@@ -473,7 +471,7 @@ describe("Apple destination URL/album version leaks", () => {
     const result = await resolveTrack(
       { isrc: "USUM71405403" },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({
           deezer: stubProvider("deezer", { byIsrc: { USUM71405403: deezerHit } }),
           apple: stubProvider("apple", { byIsrc: { USUM71405403: appleHit } }),
@@ -521,21 +519,21 @@ describe("archive thicc + Midnight Sun", () => {
 
     await expect(
       resolveTrack(query, {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella] }) }),
       }),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
     await expect(
       resolveTrack(query, {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [remix] }) }),
       }),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
 
     await expect(
       resolveTrack(query, {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella, remix] }) }),
       }),
     ).rejects.toMatchObject({ status: 404, code: "not_found" });
@@ -544,7 +542,7 @@ describe("archive thicc + Midnight Sun", () => {
     const exact = await resolveTrack(
       { ...query, title: "thicc (Fedde Le Grand remix)" },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [acapella, remix] }) }),
       },
     );
@@ -584,7 +582,7 @@ describe("archive thicc + Midnight Sun", () => {
       resolveTrack(
         { artist: "Zara Larsson", title: "Midnight Sun", album: "Midnight Sun", duration_ms },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [superLoud] }) }),
         },
       ),
@@ -593,7 +591,7 @@ describe("archive thicc + Midnight Sun", () => {
     const both = await resolveTrack(
       { artist: "Zara Larsson", title: "Midnight Sun", album: "Midnight Sun", duration_ms },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [superLoud, bare] }) }),
       },
     );
@@ -629,7 +627,7 @@ describe("positive identity controls", () => {
       resolveTrack(
         { artist: "Sneaker Pimps", title: "Spin Spin Sugar", album: "Becoming Remixed", duration_ms: 543_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [original, mix] }) }),
         },
       ),
@@ -642,7 +640,7 @@ describe("positive identity controls", () => {
         duration_ms: 543_000,
       },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [original, mix] }) }),
       },
     );
@@ -665,7 +663,7 @@ describe("positive identity controls", () => {
     const result = await resolveTrack(
       { artist: "AL-90", title, album: "Код-915913", duration_ms: 306_000 },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
       },
     );
@@ -689,7 +687,7 @@ describe("positive identity controls", () => {
       resolveTrack(
         { artist: "Ariana Grande feat. Iggy Azalea", title: "Problem", duration_ms: 200_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
         },
       ),
@@ -697,7 +695,7 @@ describe("positive identity controls", () => {
     const result = await resolveTrack(
       { artist: "Ariana Grande", title: "Problem", duration_ms: 200_000 },
       {
-        db: memoryStore(),
+        db: await freshStore(),
         providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
       },
     );
@@ -723,7 +721,7 @@ describe("positive identity controls", () => {
       resolveTrack(
         { artist: "mihimaru GT", title: "気分上々↑↑", duration_ms: 255_000 },
         {
-          db: memoryStore(),
+          db: await freshStore(),
           providers: mockProviders({ deezer: stubProvider("deezer", { searchHits: [row] }) }),
         },
       ),
@@ -745,7 +743,7 @@ describe("resolve evidence", () => {
 
     const clean = await resolveTrack(
       { artist: "The Weeknd", title: "Blinding Lights", duration_ms: 200_040 },
-      { db: memoryStore(), providers },
+      { db: await freshStore(), providers },
     );
     expect(clean.evidence.matching_rule_version).toBe(MATCHING_RULE_VERSION);
     expect(clean.evidence.recording_reused).toBe(false);
@@ -758,7 +756,7 @@ describe("resolve evidence", () => {
     expect(typeof clean.evidence.credentials_skipped).toBe("number");
     expect(Array.isArray(clean.evidence.providers_enabled)).toBe(true);
 
-    const db = memoryStore();
+    const db = await freshStore();
     const firstIsrc = await resolveTrack({ isrc: deezerHit.isrc! }, { db, providers });
     expect(firstIsrc.evidence.recording_reused).toBe(false);
     const cached = await resolveTrack({ isrc: deezerHit.isrc! }, { db, providers });

@@ -10,11 +10,10 @@
  *
  * Usage: npm run dump:seed-cases
  */
-import "dotenv/config";
 import { loadConfig } from "../src/config.ts";
-import { Store } from "../src/db.ts";
 import { resolveTrack } from "../src/pipeline.ts";
 import { createProviders } from "../src/providers/index.ts";
+import { createNodeStore } from "./lib/node-store.ts";
 
 const DEFAULT_MS = {
   "oh-no-now-my": 188_000,
@@ -105,8 +104,8 @@ const cases = [
   },
 ];
 
-const db = new Store(":memory:");
-const providers = createProviders(loadConfig());
+const db = createNodeStore();
+const providers = createProviders(loadConfig(process.env));
 
 const out = [];
 for (const input of cases) {
