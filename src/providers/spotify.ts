@@ -1,48 +1,26 @@
 import type { Config } from "../config.ts";
 import { hasSpotifyAuth } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
-import { asArray, asNumber, asString, httpJson } from "../http.ts";
+import { asArray, asNumber, asString, httpJson, type HttpJson } from "../http.ts";
+import { clientCredentialsToken } from "./token-cache.ts";
 import { quoteSearchValue, searchWithPlainFallback } from "./search.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
-interface TokenState {
-  accessToken: string;
-  expiresAt: number;
-}
-
-export function createSpotifyProvider(config: Config): Provider {
-  let token: TokenState | null = null;
-
+export function createSpotifyProvider(config: Config, http: HttpJson = httpJson): Provider {
   async function bearer(): Promise<string | null> {
     if (!hasSpotifyAuth(config)) return null;
-    if (token && token.expiresAt > Date.now() + 30_000) return token.accessToken;
-    const basic = Buffer.from(`${config.spotifyClientId}:${config.spotifyClientSecret}`).toString(
-      "base64",
-    );
-    const res = await httpJson<{ access_token?: string; expires_in?: number }>(
+    return clientCredentialsToken(
+      http,
       "https://accounts.spotify.com/api/token",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${basic}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: "grant_type=client_credentials",
-      },
+      config.spotifyClientId!,
+      config.spotifyClientSecret!,
     );
-    const access = asString(res.json?.access_token);
-    if (!access) return null;
-    token = {
-      accessToken: access,
-      expiresAt: Date.now() + (res.json?.expires_in ?? 3600) * 1000,
-    };
-    return access;
   }
 
   async function spotifyGet<T>(path: string): Promise<T | null> {
     const access = await bearer();
     if (!access) return null;
-    const res = await httpJson<T>(`https://api.spotify.com/v1${path}`, {
+    const res = await http<T>(`https://api.spotify.com/v1${path}`, {
       headers: { Authorization: `Bearer ${access}` },
     });
     return res.ok ? res.json : null;

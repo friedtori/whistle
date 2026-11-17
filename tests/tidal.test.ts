@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import type { httpJson } from "../src/http.ts";
 import { createTidalProvider } from "../src/providers/tidal.ts";
+import { clearTokenCache } from "../src/providers/token-cache.ts";
+
+beforeEach(() => clearTokenCache());
 
 const config = loadConfig({ TIDAL_CLIENT_ID: "test", TIDAL_CLIENT_SECRET: "test", TIDAL_COUNTRY: "GB" });
 const query = { title: "夜 / Day? + Light", artists: ["Artist & Guest"] };
@@ -76,5 +79,16 @@ describe("TIDAL catalog transport", () => {
     expect(calls[1].url.pathname).toBe("/v2/tracks/1");
     expect(calls[2].url.pathname).toBe("/v2/tracks");
     expect(calls[2].url.searchParams.get("filter[isrc]")).toBe("USUG11904206");
+  });
+
+  it("reuses the client-credentials token across provider instances in one isolate", async () => {
+    const first = setup({ data: [track("1")], included: [artist] });
+    await first.provider.getById("1");
+    const second = setup({ data: [track("1")], included: [artist] });
+    await second.provider.getById("1");
+    expect(first.calls.filter((call) => call.url.hostname === "auth.tidal.com")).toHaveLength(1);
+    expect(second.calls.filter((call) => call.url.hostname === "auth.tidal.com")).toHaveLength(0);
+    const auth = first.calls[0].init?.headers as Record<string, string>;
+    expect(auth.Authorization).toBe(`Basic ${btoa("test:test")}`);
   });
 });

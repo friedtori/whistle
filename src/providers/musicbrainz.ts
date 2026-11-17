@@ -1,5 +1,5 @@
 import { canonicalUrl, parsePlatformFromUrl } from "../ids.ts";
-import { asArray, asNumber, asRecord, asString, httpJson, sleep } from "../http.ts";
+import { asArray, asNumber, asRecord, asString, httpJson, sleep, type HttpJson, type JsonResponse } from "../http.ts";
 import { escapeLucene, searchWithPlainFallback } from "./search.ts";
 import type { MusicBrainzProvider, SearchQuery, TrackHit, UrlRelation } from "../types.ts";
 
@@ -16,16 +16,46 @@ interface MbRecording {
   }>;
 }
 
-export function createMusicBrainzProvider(userAgent: string): MusicBrainzProvider {
-  const limiter = createLimiter(1100);
+export const MUSICBRAINZ_API = "https://musicbrainz.org/ws/2/";
 
+/**
+ * Every MusicBrainz request goes through a gate. MusicBrainz allows <= 1
+ * request/second per client, globally. On Workers the gate is the
+ * `MusicBrainzGate` Durable Object (one instance for all isolates); Node
+ * scripts use the in-process `createLocalMbGate`.
+ */
+export interface MbGate {
+  get<T>(path: string): Promise<JsonResponse<T>>;
+}
+
+export function musicBrainzRequest(
+  http: HttpJson,
+  userAgent: string,
+  path: string,
+): Promise<JsonResponse<unknown>> {
+  return http(`${MUSICBRAINZ_API}${path}`, {
+    headers: { "User-Agent": userAgent, Accept: "application/json" },
+  });
+}
+
+/** Single-process gate: serializes calls with a minimum spacing. */
+export function createLocalMbGate(
+  userAgent: string,
+  minIntervalMs = 1100,
+  http: HttpJson = httpJson,
+): MbGate {
+  const limiter = createLimiter(minIntervalMs);
+  return {
+    get<T>(path: string) {
+      return limiter(() => musicBrainzRequest(http, userAgent, path)) as Promise<JsonResponse<T>>;
+    },
+  };
+}
+
+export function createMusicBrainzProvider(gate: MbGate): MusicBrainzProvider {
   async function mbGet<T>(path: string): Promise<T | null> {
-    return limiter(async () => {
-      const res = await httpJson<T>(`https://musicbrainz.org/ws/2/${path}`, {
-        headers: { "User-Agent": userAgent, Accept: "application/json" },
-      });
-      return res.ok ? res.json : null;
-    });
+    const res = await gate.get<T>(path);
+    return res.ok ? res.json : null;
   }
 
   return {

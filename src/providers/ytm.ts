@@ -1,9 +1,9 @@
 import type { Config } from "../config.ts";
 import { canonicalUrl } from "../ids.ts";
-import { asArray, asString, httpJson } from "../http.ts";
+import { asArray, asString, httpJson, type HttpJson } from "../http.ts";
 import type { Provider, SearchQuery, TrackHit } from "../types.ts";
 
-export function createYtmProvider(config: Config): Provider {
+export function createYtmProvider(config: Config, http: HttpJson = httpJson): Provider {
   const enabled = Boolean(config.youtubeApiKey);
 
   return {
@@ -12,7 +12,7 @@ export function createYtmProvider(config: Config): Provider {
     supportsIsrcLookup: false,
     async getById(id) {
       if (!config.youtubeApiKey) return null;
-      const videos = await videosById(config.youtubeApiKey, [id]);
+      const videos = await videosById(http, config.youtubeApiKey, [id]);
       return videos[0] ?? null;
     },
     async getByIsrc() {
@@ -21,20 +21,20 @@ export function createYtmProvider(config: Config): Provider {
     async search(query: SearchQuery) {
       if (!config.youtubeApiKey) return [];
       const q = `${query.artists[0] ?? ""} ${query.title}`.trim();
-      const res = await httpJson<{ items?: Array<{ id?: { videoId?: string } }> }>(
+      const res = await http<{ items?: Array<{ id?: { videoId?: string } }> }>(
         `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&q=${encodeURIComponent(q)}&key=${encodeURIComponent(config.youtubeApiKey)}`,
       );
       const ids = asArray(res.json?.items)
         .map((item) => asString((item as { id?: { videoId?: string } }).id?.videoId))
         .filter((id): id is string => Boolean(id));
       if (ids.length === 0) return [];
-      return videosById(config.youtubeApiKey, ids);
+      return videosById(http, config.youtubeApiKey, ids);
     },
   };
 }
 
-async function videosById(apiKey: string, ids: string[]): Promise<TrackHit[]> {
-  const res = await httpJson<{
+async function videosById(http: HttpJson, apiKey: string, ids: string[]): Promise<TrackHit[]> {
+  const res = await http<{
     items?: Array<{
       id?: string;
       snippet?: { title?: string; channelTitle?: string };

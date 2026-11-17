@@ -1,0 +1,23 @@
+# Local secrets for `wrangler dev`. Copy to .dev.vars (gitignored).
+# In production these are set with `wrangler secret put <NAME>`; never as vars.
+
+# HMAC key for verified Gum session cookies (required for /auth/session).
+# Any random string locally; production: `openssl rand -base64 32`.
+SESSION_SECRET=
+
+# Provider credentials below are optional: a missing one skips that platform.
+
+# Apple MusicKit (.p8 PEM; `\n`-escaped or single-line is fine)
+APPLE_PRIVATE_KEY=
+APPLE_TEAM_ID=
+APPLE_KEY_ID=
+# Optional pre-built MusicKit developer JWT (used instead of minting one)
+APPLE_MUSIC_TOKEN=
+
+TIDAL_CLIENT_ID=
+TIDAL_CLIENT_SECRET=
+
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+
+YOUTUBE_API_KEY=

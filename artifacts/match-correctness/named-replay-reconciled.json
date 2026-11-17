@@ -1,0 +1,333 @@
+{
+  "run_id": "dry-named-2026-11-03",
+  "timestamp": "2026-11-03T09:12:25.381Z",
+  "commit": "42f8ecc6d4635f373cd1cf0f985bb9c6aab66570",
+  "matching_rule_version": "2026-11-03.identity-destination.3",
+  "mode": "dry-fixtures",
+  "scoped": "named",
+  "providers_enabled": [],
+  "credentials_skipped": 0,
+  "archive_paths": {
+    "fuzzy": null,
+    "isrc": null
+  },
+  "cases": [
+    {
+      "kind": "fuzzy",
+      "input_key": "this is lorelei\toh no now my\toh no now my\t188000",
+      "artist": "This Is Lorelei",
+      "title": "Oh No Now My",
+      "album": "Oh No Now My",
+      "duration_ms": 188000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Billy Came Back",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 0
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "empress of\tsyw (feat. cecile believe)\tsyw (feat. cecile believe)\t167000",
+      "artist": "Empress Of",
+      "title": "SYW (feat. Cecile Believe)",
+      "album": "SYW (feat. Cecile Believe)",
+      "duration_ms": 167000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Wild Storm",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 1
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "bloc party\tpigwig\tpigwig\t210000",
+      "artist": "Bloc Party",
+      "title": "Pigwig",
+      "album": "Pigwig",
+      "duration_ms": 210000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Now We Can't Be Friends",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 2
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "empress of\thandson\thandson\t169000",
+      "artist": "Empress Of",
+      "title": "HandsOn",
+      "album": "HandsOn",
+      "duration_ms": 169000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Wild Storm",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 3
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "ricardo villalobos\tdexter\tdexter\t549000",
+      "artist": "Ricardo Villalobos",
+      "title": "Dexter",
+      "album": "Dexter",
+      "duration_ms": 549000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Nord",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 4
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "shygirl\tthicc\tthicc (fedde le grand remix)\t223000",
+      "artist": "Shygirl",
+      "title": "thicc",
+      "album": "thicc (Fedde Le Grand remix)",
+      "duration_ms": 223000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "thicc (acapella)",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0.5,
+        "title_floor": false,
+        "version_conflict": true,
+        "reason": "version_keyword"
+      },
+      "index": 5
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "zara larsson\tmidnight sun\tmidnight sun\t190000",
+      "artist": "Zara Larsson",
+      "title": "Midnight Sun",
+      "album": "Midnight Sun",
+      "duration_ms": 190000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Midnight Sun (Super Loud)",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0.5,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 6
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "sneaker pimps\tspin spin sugar\tbecoming remixed\t543000",
+      "artist": "Sneaker Pimps",
+      "title": "Spin Spin Sugar",
+      "album": "Becoming Remixed",
+      "duration_ms": 543000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Spin Spin Sugar (Armand's Dark Garage Mix)",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "reject",
+        "title_similarity": 0.2857142857142857,
+        "title_floor": false,
+        "version_conflict": false,
+        "reason": "title"
+      },
+      "index": 7
+    },
+    {
+      "kind": "fuzzy",
+      "input_key": "al-90\tзавуалированный сигнал\tкод-915913\t306000",
+      "artist": "AL-90",
+      "title": "Завуалированный Сигнал",
+      "album": "Код-915913",
+      "duration_ms": 306000,
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Завуалированный Сигнал",
+        "matched": [],
+        "unmatched": []
+      },
+      "dry": {
+        "intended": "accept",
+        "title_similarity": 1,
+        "title_floor": true,
+        "version_conflict": false,
+        "reason": "identity passed"
+      },
+      "index": 8
+    },
+    {
+      "kind": "isrc-dest",
+      "archive_row": 124,
+      "isrc": "JPPO00605880",
+      "artist": "Mihimaru Gt",
+      "title": "気分上々↑↑",
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Kibun Jou Jou",
+        "matched": []
+      },
+      "dry": {
+        "archive_accepted": true,
+        "archive_url": "https://music.apple.com/us/album/kibun-jou-jou-cover/1709945211?i=1709945229&uo=4",
+        "version_scan": "Kibun Jou Jou album kibun jou jou cover",
+        "version_conflict": true,
+        "destination_matches": false,
+        "intended": "unmatched",
+        "reason": "destination_mismatch"
+      }
+    },
+    {
+      "kind": "isrc-dest",
+      "archive_row": 327,
+      "isrc": "USUM71405403",
+      "artist": "Ariana Grande",
+      "title": "Problem",
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "Problem",
+        "matched": []
+      },
+      "dry": {
+        "archive_accepted": true,
+        "archive_url": "https://music.apple.com/us/album/problem-instrumental/1764322879?i=1764322886&uo=4",
+        "version_scan": "Problem album problem instrumental",
+        "version_conflict": true,
+        "destination_matches": false,
+        "intended": "unmatched",
+        "reason": "destination_mismatch"
+      }
+    },
+    {
+      "kind": "isrc-dest",
+      "archive_row": 341,
+      "isrc": "USUM71809768",
+      "artist": "Olivia O'Brien",
+      "title": "UDK",
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "UDK",
+        "matched": []
+      },
+      "dry": {
+        "archive_accepted": true,
+        "archive_url": "https://music.apple.com/us/album/udk-acoustic/1428922915?i=1428923801&uo=4",
+        "version_scan": "UDK album udk acoustic",
+        "version_conflict": true,
+        "destination_matches": false,
+        "intended": "unmatched",
+        "reason": "destination_mismatch"
+      }
+    },
+    {
+      "kind": "isrc-dest",
+      "archive_row": 288,
+      "isrc": "USSM12402705",
+      "artist": "Beyoncé",
+      "title": "BLACKBIIRD",
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "BLACKBIIRD",
+        "matched": []
+      },
+      "dry": {
+        "archive_accepted": true,
+        "archive_url": "https://music.apple.com/us/album/blackbiird-karaoke-version-originally-performed-by/1742094069?i=1742094073&uo=4",
+        "version_scan": "BLACKBIIRD album blackbiird karaoke version originally performed by",
+        "version_conflict": true,
+        "destination_matches": false,
+        "intended": "unmatched",
+        "reason": "destination_mismatch"
+      }
+    },
+    {
+      "kind": "isrc-dest",
+      "archive_row": 342,
+      "isrc": "USUM71819361",
+      "artist": "Ariana Grande",
+      "title": "thank u, next",
+      "archive": {
+        "ok": true,
+        "recording_id": null,
+        "title": "thank u, next",
+        "matched": []
+      },
+      "dry": {
+        "archive_accepted": true,
+        "archive_url": "https://music.apple.com/us/album/thank-u-next-instrumental/1453077778?i=1453077791&uo=4",
+        "version_scan": "thank u, next album thank u next instrumental",
+        "version_conflict": true,
+        "destination_matches": false,
+        "intended": "unmatched",
+        "reason": "destination_mismatch"
+      }
+    }
+  ]
+}
